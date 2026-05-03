@@ -434,116 +434,158 @@ class RFTL_S:
         return np.array(features)
 
 
-# ─── Experiment runner ────────────────────────────────────────────────────────
+# ─── Experiment runner (parallelized across repeats) ──────────────────────────
 
-def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350, seed=2024):
-    """
-    Run RFTL-S vs. Chapter 2 baseline under sample contamination.
-    Measures subspace recovery (principal angles) and reports weight diagnostics.
-    """
-    from motivation_pilot import (load_simulated_data, setup_users,
-                                  principal_angles_deg, inject_contamination)
+PI_S_LEVELS = [0.0, 0.05, 0.10, 0.20, 0.30]
+SIZES = [70, 100, 130]
+I_COMMON = [21, 21, 10]
+RANK = [5, 5, 4]
 
-    pi_s_levels = [0.0, 0.05, 0.10, 0.20, 0.30]
-    sizes = [70, 100, 130]
-    I_common = [21, 21, 10]
-    rank = [5, 5, 4]
+# Global data array set by the main process before forking workers
+_GLOBAL_DATA = None
 
-    print("Loading simulated data...", flush=True)
-    data = load_simulated_data(data_path, max_files=max_files)
+
+def _run_single_repeat(args):
+    """Worker function for one repeat. Designed for multiprocessing.Pool.map."""
+    rep_idx, rep_seed = args
+    from motivation_pilot import setup_users, principal_angles_deg
+    from my_mpca_02_27_nomean import MPCA_FD
+
+    data = _GLOBAL_DATA
     n_total = len(data)
-    print(f"  Loaded {n_total} samples", flush=True)
 
-    master_rng = np.random.RandomState(seed)
+    rng = np.random.RandomState(rep_seed)
+    sample = np.arange(n_total)
+    rng.shuffle(sample)
 
-    results = {
-        'baseline': {pi_s: [] for pi_s in pi_s_levels},
-        'rftl_s': {pi_s: [] for pi_s in pi_s_levels},
-        'precision': {pi_s: [] for pi_s in pi_s_levels},
-        'recall': {pi_s: [] for pi_s in pi_s_levels},
+    user1, user2, user3 = setup_users(data, sample, SIZES, seed=rep_seed)
+    users_centered = [u - np.mean(u, axis=0) for u in [user1, user2, user3]]
+
+    # Clean reference
+    mpca_clean = MPCA_FD(I_COMMON, RANK)
+    mpca_clean.iterations = 30
+    mpca_clean.train(
+        copy.deepcopy(users_centered[0]),
+        copy.deepcopy(users_centered[1]),
+        copy.deepcopy(users_centered[2])
+    )
+    U_star = [u.copy() for u in mpca_clean.U_mat]
+
+    rep_results = {
+        'baseline': {},
+        'rftl_s': {},
+        'precision': {},
+        'recall': {},
     }
 
-    for rep in range(n_repeats):
-        rep_seed = master_rng.randint(1, 100000)
-        rng = np.random.RandomState(rep_seed)
-        sample = np.arange(n_total)
-        rng.shuffle(sample)
+    for pi_s in PI_S_LEVELS:
+        contam_rng = np.random.RandomState(rep_seed + int(pi_s * 1000))
 
-        user1, user2, user3 = setup_users(data, sample, sizes, seed=rep_seed)
-        users_raw = [user1, user2, user3]
-        users_centered = [u - np.mean(u, axis=0) for u in users_raw]
+        contaminated_indices = []
+        users_dirty = []
+        for m in range(3):
+            n_samples = users_centered[m].shape[0]
+            n_contam = int(np.ceil(pi_s * n_samples))
+            indices = contam_rng.choice(n_samples, size=n_contam, replace=False) if n_contam > 0 else np.array([], dtype=int)
+            contaminated_indices.append(set(indices))
 
-        # Clean reference
-        from my_mpca_02_27_nomean import MPCA_FD
-        mpca_clean = MPCA_FD(I_common, rank)
-        mpca_clean.iterations = 30
-        mpca_clean.train(
-            copy.deepcopy(users_centered[0]),
-            copy.deepcopy(users_centered[1]),
-            copy.deepcopy(users_centered[2])
+            dirty = users_centered[m].copy()
+            if n_contam > 0:
+                noise_std = 10.0 * np.std(users_centered[m])
+                for idx in indices:
+                    dirty[idx] += contam_rng.randn(*dirty[idx].shape) * noise_std
+            users_dirty.append(dirty)
+
+        # Baseline (Chapter 2, no robustness)
+        mpca_baseline = MPCA_FD(I_COMMON, RANK)
+        mpca_baseline.iterations = 30
+        mpca_baseline.train(
+            copy.deepcopy(users_dirty[0]),
+            copy.deepcopy(users_dirty[1]),
+            copy.deepcopy(users_dirty[2])
         )
-        U_star = [u.copy() for u in mpca_clean.U_mat]
+        max_angle_baseline = 0.0
+        for n in range(3):
+            angles = principal_angles_deg(U_star[n], mpca_baseline.U_mat[n])
+            max_angle_baseline = max(max_angle_baseline, np.max(angles))
+        rep_results['baseline'][pi_s] = max_angle_baseline
 
-        for pi_s in pi_s_levels:
-            contam_rng = np.random.RandomState(rep_seed + int(pi_s * 1000))
+        # RFTL-S
+        rftl = RFTL_S(I_COMMON, RANK, irls_iterations=8, inner_iterations=30)
+        rftl.fit(users_dirty)
 
-            # Track which samples are contaminated (for precision/recall)
-            contaminated_indices = []
-            users_dirty = []
+        max_angle_rftl = 0.0
+        for n in range(3):
+            angles = principal_angles_deg(U_star[n], rftl.U_mat[n])
+            max_angle_rftl = max(max_angle_rftl, np.max(angles))
+        rep_results['rftl_s'][pi_s] = max_angle_rftl
+
+        # Precision/recall
+        if pi_s > 0:
+            tp, fp, fn = 0, 0, 0
             for m in range(3):
-                n_samples = users_centered[m].shape[0]
-                n_contam = int(np.ceil(pi_s * n_samples))
-                indices = contam_rng.choice(n_samples, size=n_contam, replace=False) if n_contam > 0 else np.array([], dtype=int)
-                contaminated_indices.append(set(indices))
+                flagged = set(np.where(rftl.weights[m] < 0.5)[0])
+                true_contam = contaminated_indices[m]
+                tp += len(flagged & true_contam)
+                fp += len(flagged - true_contam)
+                fn += len(true_contam - flagged)
+            rep_results['precision'][pi_s] = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            rep_results['recall'][pi_s] = tp / (tp + fn) if (tp + fn) > 0 else 0.0
 
-                dirty = users_centered[m].copy()
-                if n_contam > 0:
-                    noise_std = 10.0 * np.std(users_centered[m])
-                    for idx in indices:
-                        dirty[idx] += contam_rng.randn(*dirty[idx].shape) * noise_std
-                users_dirty.append(dirty)
+    print(f"  Repeat {rep_idx + 1} done (seed={rep_seed}).", flush=True)
+    return rep_results
 
-            # ── Baseline (Chapter 2, no robustness) ──
-            mpca_baseline = MPCA_FD(I_common, rank)
-            mpca_baseline.iterations = 30
-            mpca_baseline.train(
-                copy.deepcopy(users_dirty[0]),
-                copy.deepcopy(users_dirty[1]),
-                copy.deepcopy(users_dirty[2])
-            )
-            max_angle_baseline = 0.0
-            for n in range(3):
-                angles = principal_angles_deg(U_star[n], mpca_baseline.U_mat[n])
-                max_angle_baseline = max(max_angle_baseline, np.max(angles))
-            results['baseline'][pi_s].append(max_angle_baseline)
 
-            # ── RFTL-S ──
-            rftl = RFTL_S(I_common, rank, irls_iterations=8, inner_iterations=30)
-            rftl.fit(users_dirty)
+def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350,
+                          n_workers=4, seed=2024):
+    """
+    Run RFTL-S vs. Chapter 2 baseline under sample contamination.
+    Parallelized across repeats using multiprocessing.
+    """
+    import multiprocessing
+    from motivation_pilot import load_simulated_data
 
-            max_angle_rftl = 0.0
-            for n in range(3):
-                angles = principal_angles_deg(U_star[n], rftl.U_mat[n])
-                max_angle_rftl = max(max_angle_rftl, np.max(angles))
-            results['rftl_s'][pi_s].append(max_angle_rftl)
+    global _GLOBAL_DATA
 
-            # Precision/recall of flagged samples (w < 0.5)
-            if pi_s > 0:
-                tp, fp, fn = 0, 0, 0
-                for m in range(3):
-                    flagged = set(np.where(rftl.weights[m] < 0.5)[0])
-                    true_contam = contaminated_indices[m]
-                    tp += len(flagged & true_contam)
-                    fp += len(flagged - true_contam)
-                    fn += len(true_contam - flagged)
-                precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-                recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-                results['precision'][pi_s].append(precision)
-                results['recall'][pi_s].append(recall)
+    print("Loading simulated data...", flush=True)
+    min_needed = sum(SIZES)
+    _GLOBAL_DATA = load_simulated_data(data_path, max_files=max(max_files, min_needed + 10))
+    n_total = len(_GLOBAL_DATA)
+    print(f"  Loaded {n_total} samples", flush=True)
+    if n_total < min_needed:
+        print(f"  ERROR: Need at least {min_needed} samples, got {n_total}", flush=True)
+        sys.exit(1)
 
-        print(f"  Repeat {rep + 1}/{n_repeats} done.", flush=True)
+    master_rng = np.random.RandomState(seed)
+    rep_seeds = [int(master_rng.randint(1, 100000)) for _ in range(n_repeats)]
+    worker_args = [(i, s) for i, s in enumerate(rep_seeds)]
 
-    return pi_s_levels, results
+    print(f"Running {n_repeats} repeats across {n_workers} workers...", flush=True)
+
+    if n_workers > 1:
+        pool = multiprocessing.Pool(processes=n_workers)
+        all_rep_results = pool.map(_run_single_repeat, worker_args)
+        pool.close()
+        pool.join()
+    else:
+        all_rep_results = [_run_single_repeat(a) for a in worker_args]
+
+    # Aggregate results
+    results = {
+        'baseline': {pi_s: [] for pi_s in PI_S_LEVELS},
+        'rftl_s': {pi_s: [] for pi_s in PI_S_LEVELS},
+        'precision': {pi_s: [] for pi_s in PI_S_LEVELS},
+        'recall': {pi_s: [] for pi_s in PI_S_LEVELS},
+    }
+    for rep in all_rep_results:
+        for pi_s in PI_S_LEVELS:
+            results['baseline'][pi_s].append(rep['baseline'][pi_s])
+            results['rftl_s'][pi_s].append(rep['rftl_s'][pi_s])
+            if pi_s > 0 and pi_s in rep['precision']:
+                results['precision'][pi_s].append(rep['precision'][pi_s])
+                results['recall'][pi_s].append(rep['recall'][pi_s])
+
+    return PI_S_LEVELS, results
 
 
 def report_rftl_results(pi_s_levels, results):
@@ -580,6 +622,8 @@ if __name__ == '__main__':
     parser.add_argument('--data-path', default=None)
     parser.add_argument('--n-repeats', type=int, default=10)
     parser.add_argument('--max-files', type=int, default=350)
+    parser.add_argument('--n-workers', type=int, default=4,
+                        help='Number of parallel workers (default: 4)')
     args = parser.parse_args()
 
     if args.data_path:
@@ -593,6 +637,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     pi_s_levels, results = run_rftl_s_experiment(
-        data_path, n_repeats=args.n_repeats, max_files=args.max_files
+        data_path, n_repeats=args.n_repeats, max_files=args.max_files,
+        n_workers=args.n_workers
     )
     report_rftl_results(pi_s_levels, results)
