@@ -1,0 +1,27 @@
+# Data files (large .mat binaries)
+data/
+
+# Third-party packages and reference papers (not source)
+packages/
+papers/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Environment
+.env
+*.log
