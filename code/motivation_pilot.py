@@ -193,13 +193,13 @@ def run_pilot(data_path, n_repeats=5, max_files=350, seed=2024):
             )
             U_hat = mpca_dirty.U_mat
 
-            # Compute max principal angle across all 3 modes
-            max_angle = 0.0
+            # Compute mean principal angle across all 3 modes
+            all_angles = []
             for n in range(3):
                 angles = principal_angles_deg(U_star[n], U_hat[n])
-                max_angle = max(max_angle, np.max(angles))
+                all_angles.extend(angles)
 
-            results[pi_s].append(max_angle)
+            results[pi_s].append(np.mean(all_angles))
 
         flush_print(f"  Repeat {rep + 1}/{n_repeats} done.")
 
@@ -209,7 +209,7 @@ def run_pilot(data_path, n_repeats=5, max_files=350, seed=2024):
 def report_results(pi_s_levels, results):
     print("\n" + "=" * 60)
     print("MOTIVATION PILOT RESULTS")
-    print("Max principal angle (degrees) between clean U* and contaminated U")
+    print("Mean principal angle (degrees) between clean U* and contaminated U")
     print("=" * 60)
     print(f"{'pi_S':>8} | {'Mean':>8} | {'Std':>8} | {'Min':>8} | {'Max':>8}")
     print("-" * 60)
@@ -237,7 +237,7 @@ def report_results(pi_s_levels, results):
                 linewidth=2, markersize=8, color='#2c3e50')
     ax.axhline(10.0, color='red', linestyle='--', linewidth=1.5, label='10° threshold')
     ax.set_xlabel('Contamination fraction $\\pi_S$', fontsize=12)
-    ax.set_ylabel('Max principal angle (degrees)', fontsize=12)
+    ax.set_ylabel('Mean principal angle (degrees)', fontsize=12)
     ax.set_title('Subspace sensitivity to sample-level contamination\n'
                  '(Chapter 2 estimator, no robustness)', fontsize=11)
     ax.legend(fontsize=11)

@@ -113,13 +113,15 @@ class MPCA_FD_Weighted:
     def projection(self, data, matrix):
         return multi_mode_dot(data, [m.T for m in matrix], modes=[1, 2, 3])
 
-    def train(self, user_data, weights_per_user):
+    def train(self, user_data, weights_per_user, init_V=None, init_U=None):
         """
         Train weighted federated MPCA.
 
         Args:
             user_data: list of 3 arrays, each (J_m, I1_m, I2_m, I3_m)
             weights_per_user: list of 3 arrays, each (J_m,) non-negative weights
+            init_V: optional warm-start V_mat from previous IRLS iteration
+            init_U: optional warm-start U_mat from previous IRLS iteration
 
         Returns:
             prime: projected features (concatenated across users)
@@ -262,20 +264,20 @@ class MPCA_FD_Weighted:
 
         # ═══ Main training loop ═══
 
-        # Initialize V_mat (unweighted, same as Chapter 2)
-        V_mat = [None] * M
-        for i in range(M):
-            V_mat[i] = [None] * 3
+        if init_V is not None and init_U is not None:
+            V_mat = [v_list[:] for v_list in init_V]
+            U_mat = [u.copy() for u in init_U]
+            projected = [self.projection(user_data[i], V_mat[i]) for i in range(M)]
+        else:
+            V_mat = [None] * M
+            for i in range(M):
+                V_mat[i] = [None] * 3
+                for n in range(3):
+                    V_mat[i][n] = Vinitial(user_data[i], n, self.I[n])
+            projected = [self.projection(user_data[i], V_mat[i]) for i in range(M)]
+            U_mat = [None] * 3
             for n in range(3):
-                V_mat[i][n] = Vinitial(user_data[i], n, self.I[n])
-
-        # Initial projection
-        projected = [self.projection(user_data[i], V_mat[i]) for i in range(M)]
-
-        # Initialize U_mat (unweighted)
-        U_mat = [None] * 3
-        for n in range(3):
-            U_mat[n] = Uinitial(projected, n, self.P[n])
+                U_mat[n] = Uinitial(projected, n, self.P[n])
 
         # Main iterations (weighted)
         for iteration in range(self.iterations):
@@ -317,14 +319,15 @@ class RFTL_S:
     """
 
     def __init__(self, I, P, irls_iterations=10, inner_iterations=30,
-                 huber_k=1.345, tol=1e-4):
+                 huber_k=3.0, tol=1e-4):
         """
         Args:
             I: list of 3 intermediate dimensions [I1, I2, I3]
             P: list of 3 target dimensions [P1, P2, P3]
             irls_iterations: max outer IRLS iterations
             inner_iterations: iterations per MPCA_FD_Weighted call
-            huber_k: Huber tuning constant (default: 1.345 for ~95% efficiency)
+            huber_k: Huber tuning constant (default: 3.0, only downweights
+                     samples >3 MADs from median — conservative for tensor setting)
             tol: convergence tolerance for weighted scatter
         """
         self.I = I
@@ -347,65 +350,60 @@ class RFTL_S:
         """
         M = len(user_data)
 
-        # Initialize weights to 1 (unweighted first pass)
-        weights = [np.ones(user_data[m].shape[0]) for m in range(M)]
-
         self.history = {
-            'phi': [],
             'mad': [],
             'mean_weight': [],
             'n_downweighted': []
         }
 
+        # Step 0: unweighted initialization (equivalent to Chapter 2)
+        weights = [np.ones(user_data[m].shape[0]) for m in range(M)]
+        model = MPCA_FD_Weighted(self.I, self.P, iterations=self.inner_iterations)
+        prime, U_mat, V_mat = model.train(
+            [copy.deepcopy(d) for d in user_data],
+            weights
+        )
+
+        # Compute initial residuals and weights from the unweighted fit
+        residuals = [reconstruction_residual(user_data[m], V_mat[m], U_mat)
+                     for m in range(M)]
+        all_residuals = np.concatenate(residuals)
+        median_r = np.median(all_residuals)
+        mad = federated_mad(residuals)
+        weights = [huber_weights(residuals[m], median_r, mad, k=self.huber_k)
+                   for m in range(M)]
+
+        # IRLS iterations with warm-starting
         for irls_iter in range(self.irls_iterations):
-            # Fit weighted MPCA_FD
             model = MPCA_FD_Weighted(self.I, self.P, iterations=self.inner_iterations)
             prime, U_mat, V_mat = model.train(
                 [copy.deepcopy(d) for d in user_data],
-                [w.copy() for w in weights]
+                [w.copy() for w in weights],
+                init_V=[v[:] for v in V_mat],
+                init_U=[u.copy() for u in U_mat]
             )
 
-            # Compute reconstruction residuals per user
-            residuals = []
-            for m in range(M):
-                r_m = reconstruction_residual(user_data[m], V_mat[m], U_mat)
-                residuals.append(r_m)
-
-            # Federated MAD and median
+            residuals = [reconstruction_residual(user_data[m], V_mat[m], U_mat)
+                         for m in range(M)]
             all_residuals = np.concatenate(residuals)
             median_r = np.median(all_residuals)
             mad = federated_mad(residuals)
 
-            # Update weights
-            new_weights = []
-            for m in range(M):
-                w_m = huber_weights(residuals[m], median_r, mad, k=self.huber_k)
-                new_weights.append(w_m)
+            new_weights = [huber_weights(residuals[m], median_r, mad, k=self.huber_k)
+                           for m in range(M)]
 
-            # Track diagnostics
             all_w = np.concatenate(new_weights)
             self.history['mad'].append(mad)
             self.history['mean_weight'].append(np.mean(all_w))
             self.history['n_downweighted'].append(np.sum(all_w < 0.99))
 
-            # Check convergence (weight stability)
-            if irls_iter > 0:
-                weight_change = max(
-                    np.max(np.abs(new_weights[m] - weights[m])) for m in range(M)
-                )
-                if weight_change < self.tol:
-                    print(f"  IRLS converged at iteration {irls_iter + 1} "
-                          f"(max weight change: {weight_change:.6f})", flush=True)
-                    break
-
+            weight_change = max(
+                np.max(np.abs(new_weights[m] - weights[m])) for m in range(M)
+            )
             weights = new_weights
 
-        # Final fit with converged weights
-        model = MPCA_FD_Weighted(self.I, self.P, iterations=self.inner_iterations)
-        prime, U_mat, V_mat = model.train(
-            [copy.deepcopy(d) for d in user_data],
-            [w.copy() for w in weights]
-        )
+            if weight_change < self.tol:
+                break
 
         self.U_mat = U_mat
         self.V_mat = V_mat
@@ -504,21 +502,22 @@ def _run_single_repeat(args):
             copy.deepcopy(users_dirty[1]),
             copy.deepcopy(users_dirty[2])
         )
-        max_angle_baseline = 0.0
+        # Mean principal angle across all modes (more stable than max)
+        all_angles_baseline = []
         for n in range(3):
             angles = principal_angles_deg(U_star[n], mpca_baseline.U_mat[n])
-            max_angle_baseline = max(max_angle_baseline, np.max(angles))
-        rep_results['baseline'][pi_s] = max_angle_baseline
+            all_angles_baseline.extend(angles)
+        rep_results['baseline'][pi_s] = np.mean(all_angles_baseline)
 
         # RFTL-S
         rftl = RFTL_S(I_COMMON, RANK, irls_iterations=8, inner_iterations=30)
         rftl.fit(users_dirty)
 
-        max_angle_rftl = 0.0
+        all_angles_rftl = []
         for n in range(3):
             angles = principal_angles_deg(U_star[n], rftl.U_mat[n])
-            max_angle_rftl = max(max_angle_rftl, np.max(angles))
-        rep_results['rftl_s'][pi_s] = max_angle_rftl
+            all_angles_rftl.extend(angles)
+        rep_results['rftl_s'][pi_s] = np.mean(all_angles_rftl)
 
         # Precision/recall
         if pi_s > 0:
@@ -593,7 +592,7 @@ def report_rftl_results(pi_s_levels, results):
     print("RFTL-S EXPERIMENT RESULTS", flush=True)
     print("=" * 70, flush=True)
 
-    print("\nMax principal angle (degrees) -- lower is better:", flush=True)
+    print("\nMean principal angle (degrees) -- lower is better:", flush=True)
     print(f"{'pi_S':>6} | {'Baseline':>12} | {'RFTL-S':>12} | {'Improvement':>12}", flush=True)
     print("-" * 70, flush=True)
 
