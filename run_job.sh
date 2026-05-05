@@ -12,5 +12,5 @@ source ~/.bashrc
 conda activate  /usr/local/usrapps/iselingzhang/sarabi/tensorimage
 
 # Run your script
-#python3 code/motivation_pilot.py --data-path data/Simulated\ Data/Simulated\ Data --n-repeats 10 --max-files 350
- python3 code/rftl_s.py --data-path data/Simulated\ Data/Simulated\ Data --n-repeats 10 --n-workers 8
+python3 code/motivation_pilot.py --data-path data/Simulated\ Data/Simulated\ Data --n-repeats 10 --max-files 350
+# python3 code/rftl_s.py --data-path data/Simulated\ Data/Simulated\ Data --n-repeats 10 --n-workers 8
