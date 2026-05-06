@@ -5,55 +5,53 @@ Loading simulated data...
     ...loaded 300/350
   Loaded 350 samples
 Running 10 repeats across 8 workers...
-  Repeat 4 done (seed=35457).
-  Repeat 2 done (seed=52731).
-  Repeat 3 done (seed=51809).
-  Repeat 1 done (seed=7817).
-  Repeat 7 done (seed=68031).
   Repeat 8 done (seed=49336).
+  Repeat 1 done (seed=7817).
+  Repeat 3 done (seed=51809).
+  Repeat 4 done (seed=35457).
+  Repeat 7 done (seed=68031).
+  Repeat 2 done (seed=52731).
   Repeat 5 done (seed=47644).
   Repeat 6 done (seed=95781).
-  Repeat 10 done (seed=61378).
   Repeat 9 done (seed=7978).
+  Repeat 10 done (seed=61378).
 
 ======================================================================
 RFTL-S EXPERIMENT RESULTS
 ======================================================================
 
-Max principal angle (degrees) -- lower is better:
+Mean principal angle (degrees) -- lower is better:
   pi_S |     Baseline |       RFTL-S |  Improvement
 ----------------------------------------------------------------------
-  0.00 |      27.12  |      58.18  |     -31.06 
-  0.05 |      75.98  |      82.35  |      -6.36 
-  0.10 |      74.42  |      81.10  |      -6.68 
-  0.20 |      74.14  |      85.67  |     -11.53 
-  0.30 |      78.84  |      86.96  |      -8.13 
+  0.00 |       7.63  |      23.75  |     -16.12 
+  0.05 |      39.99  |      33.33  |      +6.66 
+  0.10 |      36.29  |      34.36  |      +1.93 
+  0.20 |      37.12  |      35.79  |      +1.32 
+  0.30 |      39.77  |      36.72  |      +3.05 
 
 Contamination detection (w < 0.5 threshold):
   pi_S |  Precision |     Recall
 ----------------------------------------
-  0.05 |      0.482 |      1.000
-  0.10 |      0.691 |      1.000
-  0.20 |      0.959 |      1.000
-  0.30 |      0.997 |      1.000
+  0.05 |      1.000 |      1.000
+  0.10 |      1.000 |      1.000
+  0.20 |      1.000 |      1.000
+  0.30 |      1.000 |      1.000
 ======================================================================
 
 ------------------------------------------------------------
-Sender: LSF System <lsfadmin@c028n03>
-Subject: Job 107259: <my_python_job> in cluster <Hazel> Done
+Sender: LSF System <lsfadmin@c031n04>
+Subject: Job 119186: <my_python_job> in cluster <Hazel> Done
 
-Job <my_python_job> was submitted from host <login01.hpc.ncsu.edu> by user <sarabi> in cluster <Hazel> at Sun May  3 20:35:15 2026
-Job was executed on host(s) <1*c028n03>, in queue <single_chassis>, as user <sarabi> in cluster <Hazel> at Sun May  3 20:35:16 2026
-                            <1*c033n03>
-                            <1*c032n03>
-                            <2*c031n04>
-                            <2*c030n01>
-                            <1*c030n03>
+Job <my_python_job> was submitted from host <login01.hpc.ncsu.edu> by user <sarabi> in cluster <Hazel> at Wed May  6 08:11:51 2026
+Job was executed on host(s) <2*c031n04>, in queue <single_chassis>, as user <sarabi> in cluster <Hazel> at Wed May  6 08:11:54 2026
+                            <2*c029n01>
+                            <2*c028n03>
+                            <2*c031n02>
 </tmp/.lsbtmp290932> was used as the home directory.
 </rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning> was used as the working directory.
-Started at Sun May  3 20:35:16 2026
-Terminated at Mon May  4 05:25:39 2026
-Results reported at Mon May  4 05:25:39 2026
+Started at Wed May  6 08:11:54 2026
+Terminated at Wed May  6 09:40:34 2026
+Results reported at Wed May  6 09:40:34 2026
 
 Your job looked like:
 
@@ -74,7 +72,7 @@ conda activate  /usr/local/usrapps/iselingzhang/sarabi/tensorimage
 
 # Run your script
 #python3 code/motivation_pilot.py --data-path data/Simulated\ Data/Simulated\ Data --n-repeats 10 --max-files 350
- python3 code/rftl_s.py --data-path data/Simulated\ Data/Simulated\ Data --n-repeats 10 --n-workers 8
+python3 code/rftl_s.py --data-path data/Simulated\ Data/Simulated\ Data --n-repeats 10 --n-workers 8
 
 ------------------------------------------------------------
 
@@ -82,16 +80,16 @@ Successfully completed.
 
 Resource usage summary:
 
-    CPU time :                                   31660.51 sec.
+    CPU time :                                   10417.54 sec.
     Max Memory :                                 1 GB
-    Average Memory :                             1.00 GB
-    Total Requested Memory :                     48.00 GB
-    Delta Memory :                               47.00 GB
+    Average Memory :                             0.99 GB
+    Total Requested Memory :                     32.00 GB
+    Delta Memory :                               31.00 GB
     Max Swap :                                   -
     Max Processes :                              12
     Max Threads :                                16
-    Run time :                                   31836 sec.
-    Turnaround time :                            31824 sec.
+    Run time :                                   5324 sec.
+    Turnaround time :                            5323 sec.
 
 The output (if any) is above this job summary.
 
@@ -99,5 +97,5 @@ The output (if any) is above this job summary.
 
 PS:
 
-Read file <error_file.j107259> for stderr output of this job.
+Read file <error_file.j119186> for stderr output of this job.
 
