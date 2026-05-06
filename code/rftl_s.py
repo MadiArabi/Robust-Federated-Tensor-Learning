@@ -101,13 +101,14 @@ class MPCA_FD_Weighted:
 
     Structurally identical to MPCA_FD from my_mpca_02_27_nomean.py, but:
     - V update uses weighted scatter: Phi^{m,w}_{(n)} = sum_j w_j X_{j(n)}^{Phi} X_{j(n)}^{Phi T}
-    - U update scales columns by sqrt(w_j) before incremental SVD
+    - U update: optionally scales columns by sqrt(w_j) before incremental SVD
     """
 
-    def __init__(self, I, P, iterations=30):
+    def __init__(self, I, P, iterations=30, weight_U=False):
         self.I = I
         self.P = P
         self.iterations = iterations
+        self.weight_U = weight_U
         self.lam = 0.00001
 
     def projection(self, data, matrix):
@@ -209,24 +210,26 @@ class MPCA_FD_Weighted:
 
             return v
 
-        # ─── Weighted U update (Proposition 2') ───
-        def U_weighted(projected_data, weights_list, U_mat, MODE, P):
+        # ─── U update via incremental SVD ───
+        def U_update(projected_data, weights_list, U_mat, MODE, P, use_weights):
             """
-            Weighted global projection update via incremental SVD.
-            Each sample's column block is scaled by sqrt(w_j^m).
+            Global projection update via incremental SVD.
+            If use_weights=True, each sample's column block is scaled by sqrt(w_j^m)
+            (Proposition 2'). If False, uses standard unweighted incremental SVD
+            (same as Chapter 2) — V weighting alone catches contaminated samples.
             """
             first = min((MODE + 1) % 3, (MODE + 2) % 3)
             second = max((MODE + 1) % 3, (MODE + 2) % 3)
             u1, u3 = U_mat[first], U_mat[second]
             kron_u = np.kron(u1, u3)
 
-            # Build list of weighted column blocks across all users
             all_samples = []
             for m, (user_proj, w_m) in enumerate(zip(projected_data, weights_list)):
                 for j in range(user_proj.shape[0]):
-                    # Scale by sqrt(w_j^m) — Proposition 2'
-                    scaled = np.sqrt(w_m[j]) * unfold(user_proj[j], mode=MODE) @ kron_u
-                    all_samples.append(scaled)
+                    sample = unfold(user_proj[j], mode=MODE) @ kron_u
+                    if use_weights:
+                        sample = np.sqrt(w_m[j]) * sample
+                    all_samples.append(sample)
 
             I1 = all_samples[0].shape[0]
             X = all_samples[0]
@@ -281,9 +284,10 @@ class MPCA_FD_Weighted:
 
         # Main iterations (weighted)
         for iteration in range(self.iterations):
-            # Update U (weighted)
+            # Update U
             for n in range(3):
-                U_mat[n] = U_weighted(projected, weights_per_user, U_mat, n, self.P[n])
+                U_mat[n] = U_update(projected, weights_per_user, U_mat, n, self.P[n],
+                                    use_weights=self.weight_U)
 
             # Update V (weighted) for each user
             for i in range(M):
@@ -319,7 +323,7 @@ class RFTL_S:
     """
 
     def __init__(self, I, P, irls_iterations=10, inner_iterations=30,
-                 huber_k=3.0, tol=1e-4):
+                 huber_k=3.0, tol=1e-4, weight_U=False):
         """
         Args:
             I: list of 3 intermediate dimensions [I1, I2, I3]
@@ -329,12 +333,15 @@ class RFTL_S:
             huber_k: Huber tuning constant (default: 3.0, only downweights
                      samples >3 MADs from median — conservative for tensor setting)
             tol: convergence tolerance for weighted scatter
+            weight_U: if True, also weight U update (Proposition 2');
+                      if False, only weight V update (default)
         """
         self.I = I
         self.P = P
         self.irls_iterations = irls_iterations
         self.inner_iterations = inner_iterations
         self.huber_k = huber_k
+        self.weight_U = weight_U
         self.tol = tol
 
     def fit(self, user_data):
@@ -358,7 +365,8 @@ class RFTL_S:
 
         # Step 0: unweighted initialization (equivalent to Chapter 2)
         weights = [np.ones(user_data[m].shape[0]) for m in range(M)]
-        model = MPCA_FD_Weighted(self.I, self.P, iterations=self.inner_iterations)
+        model = MPCA_FD_Weighted(self.I, self.P, iterations=self.inner_iterations,
+                                 weight_U=self.weight_U)
         prime, U_mat, V_mat = model.train(
             [copy.deepcopy(d) for d in user_data],
             weights
@@ -375,7 +383,8 @@ class RFTL_S:
 
         # IRLS iterations with warm-starting
         for irls_iter in range(self.irls_iterations):
-            model = MPCA_FD_Weighted(self.I, self.P, iterations=self.inner_iterations)
+            model = MPCA_FD_Weighted(self.I, self.P, iterations=self.inner_iterations,
+                                     weight_U=self.weight_U)
             prime, U_mat, V_mat = model.train(
                 [copy.deepcopy(d) for d in user_data],
                 [w.copy() for w in weights],
@@ -442,6 +451,13 @@ RANK = [5, 5, 4]
 # Global data array set by the main process before forking workers
 _GLOBAL_DATA = None
 
+# Configurations to compare: (label, huber_k, weight_U)
+CONFIGS = [
+    ('V-only k=3.0', 3.0, False),
+    ('V-only k=2.0', 2.0, False),
+    ('V+U   k=3.0',  3.0, True),
+]
+
 
 def _run_single_repeat(args):
     """Worker function for one repeat. Designed for multiprocessing.Pool.map."""
@@ -469,12 +485,11 @@ def _run_single_repeat(args):
     )
     U_star = [u.copy() for u in mpca_clean.U_mat]
 
-    rep_results = {
-        'baseline': {},
-        'rftl_s': {},
-        'precision': {},
-        'recall': {},
-    }
+    rep_results = {'baseline': {}}
+    for label, _, _ in CONFIGS:
+        rep_results[label] = {}
+        rep_results[f'{label}_prec'] = {}
+        rep_results[f'{label}_rec'] = {}
 
     for pi_s in PI_S_LEVELS:
         contam_rng = np.random.RandomState(rep_seed + int(pi_s * 1000))
@@ -502,34 +517,34 @@ def _run_single_repeat(args):
             copy.deepcopy(users_dirty[1]),
             copy.deepcopy(users_dirty[2])
         )
-        # Mean principal angle across all modes (more stable than max)
         all_angles_baseline = []
         for n in range(3):
             angles = principal_angles_deg(U_star[n], mpca_baseline.U_mat[n])
             all_angles_baseline.extend(angles)
         rep_results['baseline'][pi_s] = np.mean(all_angles_baseline)
 
-        # RFTL-S
-        rftl = RFTL_S(I_COMMON, RANK, irls_iterations=8, inner_iterations=30)
-        rftl.fit(users_dirty)
+        # Test each RFTL-S configuration
+        for label, huber_k, weight_U in CONFIGS:
+            rftl = RFTL_S(I_COMMON, RANK, irls_iterations=8,
+                          inner_iterations=30, huber_k=huber_k, weight_U=weight_U)
+            rftl.fit(users_dirty)
 
-        all_angles_rftl = []
-        for n in range(3):
-            angles = principal_angles_deg(U_star[n], rftl.U_mat[n])
-            all_angles_rftl.extend(angles)
-        rep_results['rftl_s'][pi_s] = np.mean(all_angles_rftl)
+            all_angles = []
+            for n in range(3):
+                angles = principal_angles_deg(U_star[n], rftl.U_mat[n])
+                all_angles.extend(angles)
+            rep_results[label][pi_s] = np.mean(all_angles)
 
-        # Precision/recall
-        if pi_s > 0:
-            tp, fp, fn = 0, 0, 0
-            for m in range(3):
-                flagged = set(np.where(rftl.weights[m] < 0.5)[0])
-                true_contam = contaminated_indices[m]
-                tp += len(flagged & true_contam)
-                fp += len(flagged - true_contam)
-                fn += len(true_contam - flagged)
-            rep_results['precision'][pi_s] = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-            rep_results['recall'][pi_s] = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            if pi_s > 0:
+                tp, fp, fn = 0, 0, 0
+                for m in range(3):
+                    flagged = set(np.where(rftl.weights[m] < 0.5)[0])
+                    true_contam = contaminated_indices[m]
+                    tp += len(flagged & true_contam)
+                    fp += len(flagged - true_contam)
+                    fn += len(true_contam - flagged)
+                rep_results[f'{label}_prec'][pi_s] = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                rep_results[f'{label}_rec'][pi_s] = tp / (tp + fn) if (tp + fn) > 0 else 0.0
 
     print(f"  Repeat {rep_idx + 1} done (seed={rep_seed}).", flush=True)
     return rep_results
@@ -538,7 +553,7 @@ def _run_single_repeat(args):
 def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350,
                           n_workers=4, seed=2024):
     """
-    Run RFTL-S vs. Chapter 2 baseline under sample contamination.
+    Run RFTL-S configurations vs. Chapter 2 baseline under sample contamination.
     Parallelized across repeats using multiprocessing.
     """
     import multiprocessing
@@ -560,6 +575,7 @@ def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350,
     worker_args = [(i, s) for i, s in enumerate(rep_seeds)]
 
     print(f"Running {n_repeats} repeats across {n_workers} workers...", flush=True)
+    print(f"Configurations: {[c[0] for c in CONFIGS]}", flush=True)
 
     if n_workers > 1:
         pool = multiprocessing.Pool(processes=n_workers)
@@ -570,49 +586,62 @@ def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350,
         all_rep_results = [_run_single_repeat(a) for a in worker_args]
 
     # Aggregate results
-    results = {
-        'baseline': {pi_s: [] for pi_s in PI_S_LEVELS},
-        'rftl_s': {pi_s: [] for pi_s in PI_S_LEVELS},
-        'precision': {pi_s: [] for pi_s in PI_S_LEVELS},
-        'recall': {pi_s: [] for pi_s in PI_S_LEVELS},
-    }
+    results = {'baseline': {pi_s: [] for pi_s in PI_S_LEVELS}}
+    for label, _, _ in CONFIGS:
+        results[label] = {pi_s: [] for pi_s in PI_S_LEVELS}
+        results[f'{label}_prec'] = {pi_s: [] for pi_s in PI_S_LEVELS}
+        results[f'{label}_rec'] = {pi_s: [] for pi_s in PI_S_LEVELS}
+
     for rep in all_rep_results:
         for pi_s in PI_S_LEVELS:
             results['baseline'][pi_s].append(rep['baseline'][pi_s])
-            results['rftl_s'][pi_s].append(rep['rftl_s'][pi_s])
-            if pi_s > 0 and pi_s in rep['precision']:
-                results['precision'][pi_s].append(rep['precision'][pi_s])
-                results['recall'][pi_s].append(rep['recall'][pi_s])
+            for label, _, _ in CONFIGS:
+                results[label][pi_s].append(rep[label][pi_s])
+                if pi_s > 0 and pi_s in rep.get(f'{label}_prec', {}):
+                    results[f'{label}_prec'][pi_s].append(rep[f'{label}_prec'][pi_s])
+                    results[f'{label}_rec'][pi_s].append(rep[f'{label}_rec'][pi_s])
 
     return PI_S_LEVELS, results
 
 
 def report_rftl_results(pi_s_levels, results):
-    print("\n" + "=" * 70, flush=True)
-    print("RFTL-S EXPERIMENT RESULTS", flush=True)
-    print("=" * 70, flush=True)
+    print("\n" + "=" * 90, flush=True)
+    print("RFTL-S EXPERIMENT RESULTS — CONFIGURATION COMPARISON", flush=True)
+    print("=" * 90, flush=True)
 
+    config_labels = [c[0] for c in CONFIGS]
+
+    # Header
     print("\nMean principal angle (degrees) -- lower is better:", flush=True)
-    print(f"{'pi_S':>6} | {'Baseline':>12} | {'RFTL-S':>12} | {'Improvement':>12}", flush=True)
-    print("-" * 70, flush=True)
+    header = f"{'pi_S':>6} | {'Baseline':>10}"
+    for label in config_labels:
+        header += f" | {label:>15}"
+    print(header, flush=True)
+    print("-" * 90, flush=True)
 
     for pi_s in pi_s_levels:
         b_mean = np.mean(results['baseline'][pi_s])
-        r_mean = np.mean(results['rftl_s'][pi_s])
-        improvement = b_mean - r_mean
-        print(f"{pi_s:>6.2f} | {b_mean:>10.2f}  | {r_mean:>10.2f}  | {improvement:>+10.2f} ",
-              flush=True)
+        row = f"{pi_s:>6.2f} | {b_mean:>10.2f}"
+        for label in config_labels:
+            r_mean = np.mean(results[label][pi_s])
+            improvement = b_mean - r_mean
+            row += f" | {r_mean:>7.2f} ({improvement:>+.1f})"
+        print(row, flush=True)
 
-    print("\nContamination detection (w < 0.5 threshold):", flush=True)
-    print(f"{'pi_S':>6} | {'Precision':>10} | {'Recall':>10}", flush=True)
-    print("-" * 40, flush=True)
-    for pi_s in pi_s_levels:
-        if pi_s > 0 and results['precision'][pi_s]:
-            p = np.mean(results['precision'][pi_s])
-            r = np.mean(results['recall'][pi_s])
-            print(f"{pi_s:>6.2f} | {p:>10.3f} | {r:>10.3f}", flush=True)
+    # Precision/recall for each config
+    for label in config_labels:
+        print(f"\nContamination detection — {label} (w < 0.5):", flush=True)
+        print(f"{'pi_S':>6} | {'Precision':>10} | {'Recall':>10}", flush=True)
+        print("-" * 40, flush=True)
+        for pi_s in pi_s_levels:
+            prec_key = f'{label}_prec'
+            rec_key = f'{label}_rec'
+            if pi_s > 0 and results[prec_key][pi_s]:
+                p = np.mean(results[prec_key][pi_s])
+                r = np.mean(results[rec_key][pi_s])
+                print(f"{pi_s:>6.2f} | {p:>10.3f} | {r:>10.3f}", flush=True)
 
-    print("=" * 70, flush=True)
+    print("=" * 90, flush=True)
 
 
 if __name__ == '__main__':
