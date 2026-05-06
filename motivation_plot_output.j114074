@@ -17,33 +17,36 @@ Loading simulated data...
 
 ============================================================
 MOTIVATION PILOT RESULTS
-Max principal angle (degrees) between clean U* and contaminated U
+Mean principal angle (degrees) between clean U* and contaminated U
 ============================================================
     pi_S |     Mean |      Std |      Min |      Max
 ------------------------------------------------------------
-    0.00 |    27.12 |    41.16 |     0.03 |    90.00
-    0.05 |    75.98 |    17.51 |    44.89 |    90.00
-    0.10 |    74.42 |    17.51 |    47.15 |    90.00
-    0.20 |    74.14 |    15.62 |    49.91 |    90.00
-    0.30 |    78.84 |    16.06 |    52.22 |    90.00
+    0.00 |     7.63 |    11.58 |     0.01 |    25.68
+    0.05 |    39.99 |    11.24 |    27.25 |    58.04
+    0.10 |    36.29 |    10.18 |    26.96 |    58.28
+    0.20 |    37.12 |     9.50 |    28.41 |    54.63
+    0.30 |    39.77 |     9.09 |    30.07 |    56.95
 ------------------------------------------------------------
 
-Motivation test at pi_S=0.10: mean angle = 74.4 deg (target: >10 deg) --> PASSED
+Motivation test at pi_S=0.10: mean angle = 36.3 deg (target: >10 deg) --> PASSED
 
 Plot saved to motivation_pilot_results.png
 
 ------------------------------------------------------------
-Sender: LSF System <lsfadmin@c028n04>
-Subject: Job 113537: <my_python_job> in cluster <Hazel> Done
+Sender: LSF System <lsfadmin@c031n01>
+Subject: Job 114074: <my_python_job> in cluster <Hazel> Done
 
-Job <my_python_job> was submitted from host <login01.hpc.ncsu.edu> by user <sarabi> in cluster <Hazel> at Mon May  4 22:16:54 2026
-Job was executed on host(s) <4*c028n04>, in queue <single_chassis>, as user <sarabi> in cluster <Hazel> at Mon May  4 22:16:57 2026
-                            <4*c027n04>
+Job <my_python_job> was submitted from host <login01.hpc.ncsu.edu> by user <sarabi> in cluster <Hazel> at Tue May  5 07:51:09 2026
+Job was executed on host(s) <1*c031n01>, in queue <single_chassis>, as user <sarabi> in cluster <Hazel> at Tue May  5 07:51:11 2026
+                            <2*c030n03>
+                            <2*c032n03>
+                            <2*c033n03>
+                            <1*c030n04>
 </tmp/.lsbtmp290932> was used as the home directory.
 </rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning> was used as the working directory.
-Started at Mon May  4 22:16:57 2026
-Terminated at Mon May  4 22:57:58 2026
-Results reported at Mon May  4 22:57:58 2026
+Started at Tue May  5 07:51:11 2026
+Terminated at Tue May  5 08:40:00 2026
+Results reported at Tue May  5 08:40:00 2026
 
 Your job looked like:
 
@@ -72,16 +75,16 @@ Successfully completed.
 
 Resource usage summary:
 
-    CPU time :                                   2441.94 sec.
+    CPU time :                                   2910.37 sec.
     Max Memory :                                 -
     Average Memory :                             -
-    Total Requested Memory :                     16.00 GB
+    Total Requested Memory :                     40.00 GB
     Delta Memory :                               -
     Max Swap :                                   -
     Max Processes :                              4
     Max Threads :                                5
-    Run time :                                   2468 sec.
-    Turnaround time :                            2464 sec.
+    Run time :                                   2933 sec.
+    Turnaround time :                            2931 sec.
 
 The output (if any) is above this job summary.
 
@@ -89,5 +92,5 @@ The output (if any) is above this job summary.
 
 PS:
 
-Read file <error_file.j113537> for stderr output of this job.
+Read file <error_file.j114074> for stderr output of this job.
 
