@@ -453,11 +453,9 @@ _GLOBAL_DATA = None
 
 # Configurations to compare: (label, huber_k, weight_U, inner_iters, irls_iters)
 CONFIGS = [
-    ('V k=3 i=30',   3.0, False, 30, 8),
-    ('V k=2 i=30',   2.0, False, 30, 8),
-    ('V+U k=3 i=30', 3.0, True,  30, 8),
-    ('V k=3 i=60',   3.0, False, 60, 8),
-    ('V k=2 i=60',   2.0, False, 60, 8),
+    ('V k=3',   3.0, False, 200, 8),
+    ('V k=2',   2.0, False, 200, 8),
+    ('V+U k=3', 3.0, True,  200, 8),
 ]
 
 
@@ -479,7 +477,7 @@ def _run_single_repeat(args):
 
     # Clean reference
     mpca_clean = MPCA_FD(I_COMMON, RANK)
-    mpca_clean.iterations = 60
+    mpca_clean.iterations = 200
     mpca_clean.train(
         copy.deepcopy(users_centered[0]),
         copy.deepcopy(users_centered[1]),
@@ -513,7 +511,7 @@ def _run_single_repeat(args):
 
         # Baseline (Chapter 2, no robustness)
         mpca_baseline = MPCA_FD(I_COMMON, RANK)
-        mpca_baseline.iterations = 60
+        mpca_baseline.iterations = 200
         mpca_baseline.train(
             copy.deepcopy(users_dirty[0]),
             copy.deepcopy(users_dirty[1]),
