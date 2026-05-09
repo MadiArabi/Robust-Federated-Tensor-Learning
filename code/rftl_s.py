@@ -451,11 +451,13 @@ RANK = [5, 5, 4]
 # Global data array set by the main process before forking workers
 _GLOBAL_DATA = None
 
-# Configurations to compare: (label, huber_k, weight_U)
+# Configurations to compare: (label, huber_k, weight_U, inner_iters, irls_iters)
 CONFIGS = [
-    ('V-only k=3.0', 3.0, False),
-    ('V-only k=2.0', 2.0, False),
-    ('V+U   k=3.0',  3.0, True),
+    ('V k=3 i=30',   3.0, False, 30, 8),
+    ('V k=2 i=30',   2.0, False, 30, 8),
+    ('V+U k=3 i=30', 3.0, True,  30, 8),
+    ('V k=3 i=60',   3.0, False, 60, 8),
+    ('V k=2 i=60',   2.0, False, 60, 8),
 ]
 
 
@@ -477,7 +479,7 @@ def _run_single_repeat(args):
 
     # Clean reference
     mpca_clean = MPCA_FD(I_COMMON, RANK)
-    mpca_clean.iterations = 30
+    mpca_clean.iterations = 60
     mpca_clean.train(
         copy.deepcopy(users_centered[0]),
         copy.deepcopy(users_centered[1]),
@@ -486,7 +488,7 @@ def _run_single_repeat(args):
     U_star = [u.copy() for u in mpca_clean.U_mat]
 
     rep_results = {'baseline': {}}
-    for label, _, _ in CONFIGS:
+    for label, *_ in CONFIGS:
         rep_results[label] = {}
         rep_results[f'{label}_prec'] = {}
         rep_results[f'{label}_rec'] = {}
@@ -511,7 +513,7 @@ def _run_single_repeat(args):
 
         # Baseline (Chapter 2, no robustness)
         mpca_baseline = MPCA_FD(I_COMMON, RANK)
-        mpca_baseline.iterations = 30
+        mpca_baseline.iterations = 60
         mpca_baseline.train(
             copy.deepcopy(users_dirty[0]),
             copy.deepcopy(users_dirty[1]),
@@ -524,9 +526,10 @@ def _run_single_repeat(args):
         rep_results['baseline'][pi_s] = np.mean(all_angles_baseline)
 
         # Test each RFTL-S configuration
-        for label, huber_k, weight_U in CONFIGS:
-            rftl = RFTL_S(I_COMMON, RANK, irls_iterations=8,
-                          inner_iterations=30, huber_k=huber_k, weight_U=weight_U)
+        for label, huber_k, weight_U, inner_iters, irls_iters in CONFIGS:
+            rftl = RFTL_S(I_COMMON, RANK, irls_iterations=irls_iters,
+                          inner_iterations=inner_iters, huber_k=huber_k,
+                          weight_U=weight_U)
             rftl.fit(users_dirty)
 
             all_angles = []
@@ -587,7 +590,7 @@ def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350,
 
     # Aggregate results
     results = {'baseline': {pi_s: [] for pi_s in PI_S_LEVELS}}
-    for label, _, _ in CONFIGS:
+    for label, *_ in CONFIGS:
         results[label] = {pi_s: [] for pi_s in PI_S_LEVELS}
         results[f'{label}_prec'] = {pi_s: [] for pi_s in PI_S_LEVELS}
         results[f'{label}_rec'] = {pi_s: [] for pi_s in PI_S_LEVELS}
@@ -595,7 +598,7 @@ def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350,
     for rep in all_rep_results:
         for pi_s in PI_S_LEVELS:
             results['baseline'][pi_s].append(rep['baseline'][pi_s])
-            for label, _, _ in CONFIGS:
+            for label, *_ in CONFIGS:
                 results[label][pi_s].append(rep[label][pi_s])
                 if pi_s > 0 and pi_s in rep.get(f'{label}_prec', {}):
                     results[f'{label}_prec'][pi_s].append(rep[f'{label}_prec'][pi_s])
