@@ -312,112 +312,96 @@ class MPCA_FD_Weighted:
         return prime, U_mat, V_mat
 
 
-# ─── RFTL-S: Full IRLS Algorithm ─────────────────────────────────────────────
+# ─── RFTL-S: Trimmed Scatter Estimator ───────────────────────────────────────
 
 class RFTL_S:
     """
     Robust Federated Tensor Learning — Sample-Weighted (Algorithm 5).
 
-    Wraps MPCA_FD_Weighted in an outer IRLS loop that updates per-sample
-    weights based on reconstruction residuals and Huber-like reweighting.
+    Two-step approach:
+      1. Fit standard MPCA_FD (unweighted, fully converged)
+      2. Compute reconstruction residuals to identify outliers
+      3. Hard-threshold: samples with r_j > c * median(r) are excluded (w=0)
+      4. Re-fit once with trimmed data (warm-started from step 1)
+
+    This avoids the IRLS feedback loop that causes clean-data degradation.
+    The relative threshold (c * median) is stable on clean data because
+    median(r) stays finite and well-separated from contaminated residuals.
     """
 
-    def __init__(self, I, P, irls_iterations=10, inner_iterations=30,
-                 huber_k=3.0, tol=1e-4, weight_U=False):
+    def __init__(self, I, P, threshold_c=3.0, inner_iterations=200,
+                 weight_U=False):
         """
         Args:
             I: list of 3 intermediate dimensions [I1, I2, I3]
             P: list of 3 target dimensions [P1, P2, P3]
-            irls_iterations: max outer IRLS iterations
+            threshold_c: outlier threshold multiplier — flag if r_j > c * median(r)
             inner_iterations: iterations per MPCA_FD_Weighted call
-            huber_k: Huber tuning constant (default: 3.0, only downweights
-                     samples >3 MADs from median — conservative for tensor setting)
-            tol: convergence tolerance for weighted scatter
-            weight_U: if True, also weight U update (Proposition 2');
-                      if False, only weight V update (default)
+            weight_U: if True, also weight U update; if False, only weight V
         """
         self.I = I
         self.P = P
-        self.irls_iterations = irls_iterations
+        self.threshold_c = threshold_c
         self.inner_iterations = inner_iterations
-        self.huber_k = huber_k
         self.weight_U = weight_U
-        self.tol = tol
 
     def fit(self, user_data):
         """
-        Fit RFTL-S model.
+        Fit RFTL-S model via trimmed scatter.
 
         Args:
             user_data: list of M arrays, each (J_m, I1_m, I2_m, I3_m),
                       mean-centered tensor data per user.
 
         Returns:
-            self (fitted model with U_mat, V_mat, weights, residuals, history)
+            self (fitted model with U_mat, V_mat, weights, residuals)
         """
         M = len(user_data)
 
-        self.history = {
-            'mad': [],
-            'mean_weight': [],
-            'n_downweighted': []
-        }
-
-        # Step 0: unweighted initialization (equivalent to Chapter 2)
-        weights = [np.ones(user_data[m].shape[0]) for m in range(M)]
-        model = MPCA_FD_Weighted(self.I, self.P, iterations=self.inner_iterations,
-                                 weight_U=self.weight_U)
-        prime, U_mat, V_mat = model.train(
+        # Step 1: unweighted fit (fully converged — equivalent to Chapter 2)
+        weights_ones = [np.ones(user_data[m].shape[0]) for m in range(M)]
+        model_init = MPCA_FD_Weighted(self.I, self.P,
+                                      iterations=self.inner_iterations,
+                                      weight_U=False)
+        prime, U_mat, V_mat = model_init.train(
             [copy.deepcopy(d) for d in user_data],
-            weights
+            weights_ones
         )
 
-        # Compute initial residuals and weights from the unweighted fit
+        # Step 2: compute residuals and identify outliers
         residuals = [reconstruction_residual(user_data[m], V_mat[m], U_mat)
                      for m in range(M)]
         all_residuals = np.concatenate(residuals)
         median_r = np.median(all_residuals)
-        mad = federated_mad(residuals)
-        weights = [huber_weights(residuals[m], median_r, mad, k=self.huber_k)
-                   for m in range(M)]
+        threshold = self.threshold_c * median_r
 
-        # IRLS iterations with warm-starting
-        for irls_iter in range(self.irls_iterations):
-            model = MPCA_FD_Weighted(self.I, self.P, iterations=self.inner_iterations,
-                                     weight_U=self.weight_U)
-            prime, U_mat, V_mat = model.train(
+        # Hard threshold: w=0 if outlier, w=1 otherwise
+        weights = []
+        for m in range(M):
+            w_m = np.where(residuals[m] <= threshold, 1.0, 0.0)
+            weights.append(w_m)
+
+        n_flagged = sum(np.sum(w == 0) for w in weights)
+
+        # Step 3: re-fit once with trimmed data (warm-started)
+        if n_flagged > 0:
+            model_trimmed = MPCA_FD_Weighted(self.I, self.P,
+                                            iterations=self.inner_iterations,
+                                            weight_U=self.weight_U)
+            prime, U_mat, V_mat = model_trimmed.train(
                 [copy.deepcopy(d) for d in user_data],
                 [w.copy() for w in weights],
                 init_V=[v[:] for v in V_mat],
                 init_U=[u.copy() for u in U_mat]
             )
 
-            residuals = [reconstruction_residual(user_data[m], V_mat[m], U_mat)
-                         for m in range(M)]
-            all_residuals = np.concatenate(residuals)
-            median_r = np.median(all_residuals)
-            mad = federated_mad(residuals)
-
-            new_weights = [huber_weights(residuals[m], median_r, mad, k=self.huber_k)
-                           for m in range(M)]
-
-            all_w = np.concatenate(new_weights)
-            self.history['mad'].append(mad)
-            self.history['mean_weight'].append(np.mean(all_w))
-            self.history['n_downweighted'].append(np.sum(all_w < 0.99))
-
-            weight_change = max(
-                np.max(np.abs(new_weights[m] - weights[m])) for m in range(M)
-            )
-            weights = new_weights
-
-            if weight_change < self.tol:
-                break
-
         self.U_mat = U_mat
         self.V_mat = V_mat
         self.weights = weights
         self.residuals = residuals
+        self.threshold = threshold
+        self.median_r = median_r
+        self.n_flagged = n_flagged
         self.prime = prime
 
         return self
@@ -451,11 +435,12 @@ RANK = [5, 5, 4]
 # Global data array set by the main process before forking workers
 _GLOBAL_DATA = None
 
-# Configurations to compare: (label, huber_k, weight_U, inner_iters, irls_iters)
+# Configurations to compare: (label, threshold_c, weight_U)
 CONFIGS = [
-    ('V k=3',   3.0, False, 200, 8),
-    ('V k=2',   2.0, False, 200, 8),
-    ('V+U k=3', 3.0, True,  200, 8),
+    ('c=2',     2.0, False),
+    ('c=3',     3.0, False),
+    ('c=5',     5.0, False),
+    ('c=3 V+U', 3.0, True),
 ]
 
 
@@ -524,10 +509,9 @@ def _run_single_repeat(args):
         rep_results['baseline'][pi_s] = np.mean(all_angles_baseline)
 
         # Test each RFTL-S configuration
-        for label, huber_k, weight_U, inner_iters, irls_iters in CONFIGS:
-            rftl = RFTL_S(I_COMMON, RANK, irls_iterations=irls_iters,
-                          inner_iterations=inner_iters, huber_k=huber_k,
-                          weight_U=weight_U)
+        for label, threshold_c, weight_U in CONFIGS:
+            rftl = RFTL_S(I_COMMON, RANK, threshold_c=threshold_c,
+                          inner_iterations=200, weight_U=weight_U)
             rftl.fit(users_dirty)
 
             all_angles = []
@@ -539,7 +523,7 @@ def _run_single_repeat(args):
             if pi_s > 0:
                 tp, fp, fn = 0, 0, 0
                 for m in range(3):
-                    flagged = set(np.where(rftl.weights[m] < 0.5)[0])
+                    flagged = set(np.where(rftl.weights[m] == 0.0)[0])
                     true_contam = contaminated_indices[m]
                     tp += len(flagged & true_contam)
                     fp += len(flagged - true_contam)
