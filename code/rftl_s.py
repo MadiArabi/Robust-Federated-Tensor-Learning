@@ -444,8 +444,17 @@ CONFIGS = [
 ]
 
 
+REFIT_ITERATIONS = 50
+
+
 def _run_single_repeat(args):
-    """Worker function for one repeat. Designed for multiprocessing.Pool.map."""
+    """Worker function for one repeat. Designed for multiprocessing.Pool.map.
+
+    Optimization: the unweighted fit (200 iters) is computed ONCE per pi_S
+    level and reused as both the baseline and the starting point for all
+    RFTL-S configs. Only the trimmed re-fit (50 iters, warm-started) runs
+    per config, cutting total work by ~4-5x.
+    """
     rep_idx, rep_seed = args
     from motivation_pilot import setup_users, principal_angles_deg
     from my_mpca_02_27_nomean import MPCA_FD
@@ -460,7 +469,7 @@ def _run_single_repeat(args):
     user1, user2, user3 = setup_users(data, sample, SIZES, seed=rep_seed)
     users_centered = [u - np.mean(u, axis=0) for u in [user1, user2, user3]]
 
-    # Clean reference
+    # Clean reference (uncontaminated)
     mpca_clean = MPCA_FD(I_COMMON, RANK)
     mpca_clean.iterations = 200
     mpca_clean.train(
@@ -494,36 +503,59 @@ def _run_single_repeat(args):
                     dirty[idx] += contam_rng.randn(*dirty[idx].shape) * noise_std
             users_dirty.append(dirty)
 
-        # Baseline (Chapter 2, no robustness)
-        mpca_baseline = MPCA_FD(I_COMMON, RANK)
-        mpca_baseline.iterations = 200
-        mpca_baseline.train(
-            copy.deepcopy(users_dirty[0]),
-            copy.deepcopy(users_dirty[1]),
-            copy.deepcopy(users_dirty[2])
+        # ONE unweighted fit per pi_S (serves as baseline AND RFTL-S init)
+        weights_ones = [np.ones(users_dirty[m].shape[0]) for m in range(3)]
+        model_unw = MPCA_FD_Weighted(I_COMMON, RANK, iterations=200,
+                                     weight_U=False)
+        _, U_unw, V_unw = model_unw.train(
+            [copy.deepcopy(d) for d in users_dirty],
+            weights_ones
         )
+
+        # Baseline angle
         all_angles_baseline = []
         for n in range(3):
-            angles = principal_angles_deg(U_star[n], mpca_baseline.U_mat[n])
+            angles = principal_angles_deg(U_star[n], U_unw[n])
             all_angles_baseline.extend(angles)
         rep_results['baseline'][pi_s] = np.mean(all_angles_baseline)
 
-        # Test each RFTL-S configuration
+        # Compute residuals ONCE from unweighted fit
+        residuals = [reconstruction_residual(users_dirty[m], V_unw[m], U_unw)
+                     for m in range(3)]
+        all_residuals = np.concatenate(residuals)
+        median_r = np.median(all_residuals)
+
+        # Test each RFTL-S config (only the re-fit differs)
         for label, threshold_c, weight_U in CONFIGS:
-            rftl = RFTL_S(I_COMMON, RANK, threshold_c=threshold_c,
-                          inner_iterations=200, weight_U=weight_U)
-            rftl.fit(users_dirty)
+            threshold = threshold_c * median_r
+            weights = [np.where(residuals[m] <= threshold, 1.0, 0.0)
+                       for m in range(3)]
+            n_flagged = sum(np.sum(w == 0) for w in weights)
+
+            if n_flagged > 0:
+                model_trim = MPCA_FD_Weighted(I_COMMON, RANK,
+                                             iterations=REFIT_ITERATIONS,
+                                             weight_U=weight_U)
+                _, U_trim, V_trim = model_trim.train(
+                    [copy.deepcopy(d) for d in users_dirty],
+                    [w.copy() for w in weights],
+                    init_V=[v[:] for v in V_unw],
+                    init_U=[u.copy() for u in U_unw]
+                )
+                U_result = U_trim
+            else:
+                U_result = U_unw
 
             all_angles = []
             for n in range(3):
-                angles = principal_angles_deg(U_star[n], rftl.U_mat[n])
+                angles = principal_angles_deg(U_star[n], U_result[n])
                 all_angles.extend(angles)
             rep_results[label][pi_s] = np.mean(all_angles)
 
             if pi_s > 0:
                 tp, fp, fn = 0, 0, 0
                 for m in range(3):
-                    flagged = set(np.where(rftl.weights[m] == 0.0)[0])
+                    flagged = set(np.where(weights[m] == 0.0)[0])
                     true_contam = contaminated_indices[m]
                     tp += len(flagged & true_contam)
                     fp += len(flagged - true_contam)
