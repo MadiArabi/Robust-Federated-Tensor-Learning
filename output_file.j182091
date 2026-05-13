@@ -6,14 +6,14 @@ Loading simulated data...
   Loaded 350 samples
 Running 10 repeats across 8 workers...
 Configurations: ['c=2', 'c=3', 'c=5', 'c=3 V+U']
-  Repeat 6 done (seed=95781).
-  Repeat 1 done (seed=7817).
   Repeat 2 done (seed=52731).
-  Repeat 3 done (seed=51809).
-  Repeat 8 done (seed=49336).
-  Repeat 5 done (seed=47644).
-  Repeat 4 done (seed=35457).
+  Repeat 6 done (seed=95781).
   Repeat 7 done (seed=68031).
+  Repeat 8 done (seed=49336).
+  Repeat 3 done (seed=51809).
+  Repeat 1 done (seed=7817).
+  Repeat 4 done (seed=35457).
+  Repeat 5 done (seed=47644).
   Repeat 9 done (seed=7978).
   Repeat 10 done (seed=61378).
 
@@ -24,11 +24,11 @@ RFTL-S EXPERIMENT RESULTS — CONFIGURATION COMPARISON
 Mean principal angle (degrees) -- lower is better:
   pi_S |   Baseline |             c=2 |             c=3 |             c=5 |         c=3 V+U
 ------------------------------------------------------------------------------------------
-  0.00 |      34.69 |   34.69 (+0.0) |   34.69 (+0.0) |   34.69 (+0.0) |   34.69 (+0.0)
-  0.05 |      42.94 |   42.94 (+0.0) |   42.94 (+0.0) |   42.94 (+0.0) |   42.94 (+0.0)
-  0.10 |      43.04 |   43.04 (+0.0) |   43.04 (+0.0) |   43.04 (+0.0) |   43.04 (+0.0)
-  0.20 |      43.90 |   43.90 (+0.0) |   43.90 (+0.0) |   43.90 (+0.0) |   43.90 (+0.0)
-  0.30 |      43.07 |   43.07 (-0.0) |   43.07 (-0.0) |   43.07 (-0.0) |   45.81 (-2.7)
+  0.00 |       0.03 |    0.03 (+0.0) |    0.03 (+0.0) |    0.03 (+0.0) |    0.03 (+0.0)
+  0.05 |      53.85 |   52.46 (+1.4) |   52.46 (+1.4) |   52.46 (+1.4) |   52.47 (+1.4)
+  0.10 |      50.95 |   49.46 (+1.5) |   49.46 (+1.5) |   49.46 (+1.5) |   49.49 (+1.5)
+  0.20 |      50.00 |   48.59 (+1.4) |   48.59 (+1.4) |   48.59 (+1.4) |   48.57 (+1.4)
+  0.30 |      53.06 |   50.35 (+2.7) |   50.35 (+2.7) |   50.35 (+2.7) |   52.32 (+0.7)
 
 Contamination detection — c=2 (w < 0.5):
   pi_S |  Precision |     Recall
@@ -64,18 +64,17 @@ Contamination detection — c=3 V+U (w < 0.5):
 ==========================================================================================
 
 ------------------------------------------------------------
-Sender: LSF System <lsfadmin@c028n04>
-Subject: Job 150681: <my_python_job> in cluster <Hazel> Done
+Sender: LSF System <lsfadmin@c032n02>
+Subject: Job 182091: <my_python_job> in cluster <Hazel> Done
 
-Job <my_python_job> was submitted from host <login01.hpc.ncsu.edu> by user <sarabi> in cluster <Hazel> at Mon May 11 20:40:38 2026
-Job was executed on host(s) <3*c028n04>, in queue <single_chassis>, as user <sarabi> in cluster <Hazel> at Mon May 11 20:40:44 2026
-                            <3*c028n02>
-                            <2*c033n03>
+Job <my_python_job> was submitted from host <login01.hpc.ncsu.edu> by user <sarabi> in cluster <Hazel> at Tue May 12 22:54:39 2026
+Job was executed on host(s) <4*c032n02>, in queue <single_chassis>, as user <sarabi> in cluster <Hazel> at Tue May 12 22:54:44 2026
+                            <4*c031n02>
 </tmp/.lsbtmp290932> was used as the home directory.
 </rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning> was used as the working directory.
-Started at Mon May 11 20:40:44 2026
-Terminated at Mon May 11 21:49:35 2026
-Results reported at Mon May 11 21:49:35 2026
+Started at Tue May 12 22:54:44 2026
+Terminated at Tue May 12 23:58:06 2026
+Results reported at Tue May 12 23:58:06 2026
 
 Your job looked like:
 
@@ -104,16 +103,16 @@ Successfully completed.
 
 Resource usage summary:
 
-    CPU time :                                   11253.54 sec.
+    CPU time :                                   13012.36 sec.
     Max Memory :                                 1 GB
     Average Memory :                             0.99 GB
-    Total Requested Memory :                     24.00 GB
-    Delta Memory :                               23.00 GB
+    Total Requested Memory :                     16.00 GB
+    Delta Memory :                               15.00 GB
     Max Swap :                                   -
     Max Processes :                              12
     Max Threads :                                16
-    Run time :                                   4142 sec.
-    Turnaround time :                            4137 sec.
+    Run time :                                   3824 sec.
+    Turnaround time :                            3807 sec.
 
 The output (if any) is above this job summary.
 
@@ -121,5 +120,5 @@ The output (if any) is above this job summary.
 
 PS:
 
-Read file <error_file.j150681> for stderr output of this job.
+Read file <error_file.j182091> for stderr output of this job.
 
