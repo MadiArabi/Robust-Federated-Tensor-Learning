@@ -503,14 +503,16 @@ def _run_single_repeat(args):
                     dirty[idx] += contam_rng.randn(*dirty[idx].shape) * noise_std
             users_dirty.append(dirty)
 
-        # ONE unweighted fit per pi_S (serves as baseline AND RFTL-S init)
-        weights_ones = [np.ones(users_dirty[m].shape[0]) for m in range(3)]
-        model_unw = MPCA_FD_Weighted(I_COMMON, RANK, iterations=200,
-                                     weight_U=False)
-        _, U_unw, V_unw = model_unw.train(
-            [copy.deepcopy(d) for d in users_dirty],
-            weights_ones
+        # ONE unweighted fit per pi_S using MPCA_FD (same impl as clean ref)
+        mpca_baseline = MPCA_FD(I_COMMON, RANK)
+        mpca_baseline.iterations = 200
+        mpca_baseline.train(
+            copy.deepcopy(users_dirty[0]),
+            copy.deepcopy(users_dirty[1]),
+            copy.deepcopy(users_dirty[2])
         )
+        U_unw = [u.copy() for u in mpca_baseline.U_mat]
+        V_unw = [[v.copy() for v in mpca_baseline.V_mat[m]] for m in range(3)]
 
         # Baseline angle
         all_angles_baseline = []
@@ -525,7 +527,7 @@ def _run_single_repeat(args):
         all_residuals = np.concatenate(residuals)
         median_r = np.median(all_residuals)
 
-        # Test each RFTL-S config (only the re-fit differs)
+        # Test each RFTL-S config (only the trimmed re-fit differs)
         for label, threshold_c, weight_U in CONFIGS:
             threshold = threshold_c * median_r
             weights = [np.where(residuals[m] <= threshold, 1.0, 0.0)
@@ -536,7 +538,7 @@ def _run_single_repeat(args):
                 model_trim = MPCA_FD_Weighted(I_COMMON, RANK,
                                              iterations=REFIT_ITERATIONS,
                                              weight_U=weight_U)
-                _, U_trim, V_trim = model_trim.train(
+                _, U_trim, _ = model_trim.train(
                     [copy.deepcopy(d) for d in users_dirty],
                     [w.copy() for w in weights],
                     init_V=[v[:] for v in V_unw],
