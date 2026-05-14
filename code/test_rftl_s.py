@@ -48,19 +48,15 @@ for m in range(3):
     r = reconstruction_residual(users_dirty[m], V_mat[m], U_mat)
     print(f"  User {m}: min={r.min():.2f} max={r.max():.2f} mean={r.mean():.2f}", flush=True)
 
-# Test full RFTL-S with proper rank
+# Test full RFTL-S (cold re-fit)
 print("\nTesting RFTL_S.fit() with rank [5,5,4]...", flush=True)
-rftl = RFTL_S([21, 21, 10], [5, 5, 4], irls_iterations=5, inner_iterations=10)
+rftl = RFTL_S([21, 21, 10], [5, 5, 4], threshold_c=3.0, inner_iterations=10)
 rftl.fit(users_dirty)
+print(f"  Flagged {rftl.n_flagged} samples, threshold={rftl.threshold:.2f}", flush=True)
 print(f"  User 0 weights (contaminated 0-2, clean 3+):", flush=True)
-print(f"    idx 0: {rftl.weights[0][0]:.3f}  (contaminated)", flush=True)
-print(f"    idx 1: {rftl.weights[0][1]:.3f}  (contaminated)", flush=True)
-print(f"    idx 2: {rftl.weights[0][2]:.3f}  (contaminated)", flush=True)
-print(f"    idx 3: {rftl.weights[0][3]:.3f}  (clean)", flush=True)
-print(f"    idx 4: {rftl.weights[0][4]:.3f}  (clean)", flush=True)
-print(f"    idx 5: {rftl.weights[0][5]:.3f}  (clean)", flush=True)
+for i in range(min(6, len(rftl.weights[0]))):
+    tag = "contaminated" if i < n_contam else "clean"
+    print(f"    idx {i}: {rftl.weights[0][i]:.0f}  ({tag})", flush=True)
 print(f"  User 1 mean weight: {np.mean(rftl.weights[1]):.3f} (all clean)", flush=True)
 print(f"  User 2 mean weight: {np.mean(rftl.weights[2]):.3f} (all clean)", flush=True)
-n_down = [int(x) for x in rftl.history['n_downweighted']]
-print(f"  N downweighted per IRLS iter: {n_down}", flush=True)
 print("SUCCESS", flush=True)

@@ -11,6 +11,14 @@
 source ~/.bashrc
 conda activate  /usr/local/usrapps/iselingzhang/sarabi/tensorimage
 
-# Run your script
-#python3 code/motivation_pilot.py --data-path data/Simulated\ Data/Simulated\ Data --n-repeats 10 --max-files 350
-python3 code/rftl_s.py --data-path data/Simulated\ Data/Simulated\ Data --n-repeats 10 --n-workers 8
+# Run experiments
+DATA="data/Simulated Data/Simulated Data"
+
+echo "=== RFTL-S ==="
+python3 code/rftl_s.py --data-path "$DATA" --n-repeats 10 --n-workers 8
+
+echo "=== RFTL-U ==="
+python3 code/rftl_u.py --data-path "$DATA" --n-repeats 10 --n-workers 8
+
+echo "=== RFTL-21 ==="
+python3 code/rftl_21.py --data-path "$DATA" --n-repeats 10 --n-workers 8

@@ -312,7 +312,7 @@ class MPCA_FD_Weighted:
         return prime, U_mat, V_mat
 
 
-# ─── RFTL-S: Trimmed Scatter Estimator ───────────────────────────────────────
+# ─── RFTL-S: Trimmed Re-fit ──────────────────────────────────────────────────
 
 class RFTL_S:
     """
@@ -321,52 +321,33 @@ class RFTL_S:
     Two-step approach:
       1. Fit standard MPCA_FD (unweighted, fully converged)
       2. Compute reconstruction residuals to identify outliers
-      3. Hard-threshold: samples with r_j > c * median(r) are excluded (w=0)
-      4. Re-fit once with trimmed data (warm-started from step 1)
+      3. Hard-threshold: samples with r_j > c * median(r) are excluded
+      4. Cold re-fit: remove flagged samples, run fresh MPCA_FD from scratch
 
-    This avoids the IRLS feedback loop that causes clean-data degradation.
-    The relative threshold (c * median) is stable on clean data because
-    median(r) stays finite and well-separated from contaminated residuals.
+    Cold re-fit avoids anchoring to the contaminated subspace that a
+    warm-started approach would inherit from the initial fit.
     """
 
-    def __init__(self, I, P, threshold_c=3.0, inner_iterations=200,
-                 weight_U=False):
-        """
-        Args:
-            I: list of 3 intermediate dimensions [I1, I2, I3]
-            P: list of 3 target dimensions [P1, P2, P3]
-            threshold_c: outlier threshold multiplier — flag if r_j > c * median(r)
-            inner_iterations: iterations per MPCA_FD_Weighted call
-            weight_U: if True, also weight U update; if False, only weight V
-        """
+    def __init__(self, I, P, threshold_c=3.0, inner_iterations=200):
         self.I = I
         self.P = P
         self.threshold_c = threshold_c
         self.inner_iterations = inner_iterations
-        self.weight_U = weight_U
 
     def fit(self, user_data):
-        """
-        Fit RFTL-S model via trimmed scatter.
-
-        Args:
-            user_data: list of M arrays, each (J_m, I1_m, I2_m, I3_m),
-                      mean-centered tensor data per user.
-
-        Returns:
-            self (fitted model with U_mat, V_mat, weights, residuals)
-        """
+        from my_mpca_02_27_nomean import MPCA_FD
         M = len(user_data)
 
-        # Step 1: unweighted fit (fully converged — equivalent to Chapter 2)
-        weights_ones = [np.ones(user_data[m].shape[0]) for m in range(M)]
-        model_init = MPCA_FD_Weighted(self.I, self.P,
-                                      iterations=self.inner_iterations,
-                                      weight_U=False)
-        prime, U_mat, V_mat = model_init.train(
-            [copy.deepcopy(d) for d in user_data],
-            weights_ones
+        # Step 1: unweighted fit on full data
+        mpca_init = MPCA_FD(self.I, self.P)
+        mpca_init.iterations = self.inner_iterations
+        mpca_init.train(
+            copy.deepcopy(user_data[0]),
+            copy.deepcopy(user_data[1]),
+            copy.deepcopy(user_data[2])
         )
+        U_mat = [u.copy() for u in mpca_init.U_mat]
+        V_mat = [[v.copy() for v in mpca_init.V_mat[m]] for m in range(M)]
 
         # Step 2: compute residuals and identify outliers
         residuals = [reconstruction_residual(user_data[m], V_mat[m], U_mat)
@@ -375,25 +356,21 @@ class RFTL_S:
         median_r = np.median(all_residuals)
         threshold = self.threshold_c * median_r
 
-        # Hard threshold: w=0 if outlier, w=1 otherwise
-        weights = []
-        for m in range(M):
-            w_m = np.where(residuals[m] <= threshold, 1.0, 0.0)
-            weights.append(w_m)
-
+        weights = [np.where(residuals[m] <= threshold, 1.0, 0.0) for m in range(M)]
         n_flagged = sum(np.sum(w == 0) for w in weights)
 
-        # Step 3: re-fit once with trimmed data (warm-started)
+        # Step 3: cold re-fit — remove outliers, fresh MPCA_FD from scratch
         if n_flagged > 0:
-            model_trimmed = MPCA_FD_Weighted(self.I, self.P,
-                                            iterations=self.inner_iterations,
-                                            weight_U=self.weight_U)
-            prime, U_mat, V_mat = model_trimmed.train(
-                [copy.deepcopy(d) for d in user_data],
-                [w.copy() for w in weights],
-                init_V=[v[:] for v in V_mat],
-                init_U=[u.copy() for u in U_mat]
+            users_trimmed = [user_data[m][weights[m] == 1.0] for m in range(M)]
+            mpca_trimmed = MPCA_FD(self.I, self.P)
+            mpca_trimmed.iterations = self.inner_iterations
+            mpca_trimmed.train(
+                copy.deepcopy(users_trimmed[0]),
+                copy.deepcopy(users_trimmed[1]),
+                copy.deepcopy(users_trimmed[2])
             )
+            U_mat = [u.copy() for u in mpca_trimmed.U_mat]
+            V_mat = [[v.copy() for v in mpca_trimmed.V_mat[m]] for m in range(M)]
 
         self.U_mat = U_mat
         self.V_mat = V_mat
@@ -402,7 +379,6 @@ class RFTL_S:
         self.threshold = threshold
         self.median_r = median_r
         self.n_flagged = n_flagged
-        self.prime = prime
 
         return self
 
@@ -428,48 +404,41 @@ class RFTL_S:
 # ─── Experiment runner (parallelized across repeats) ──────────────────────────
 
 PI_S_LEVELS = [0.0, 0.05, 0.10, 0.20, 0.30]
+NOISE_MULTIPLIERS = [2, 3, 5, 10]
 SIZES = [70, 100, 130]
 I_COMMON = [21, 21, 10]
 RANK = [5, 5, 4]
 
-# Global data array set by the main process before forking workers
 _GLOBAL_DATA = None
 
-# Configurations to compare: (label, threshold_c, weight_U)
 CONFIGS = [
-    ('c=2',     2.0, False),
-    ('c=3',     3.0, False),
-    ('c=5',     5.0, False),
-    ('c=3 V+U', 3.0, True),
+    ('c=2', 2.0),
+    ('c=3', 3.0),
+    ('c=5', 5.0),
 ]
 
 
-REFIT_ITERATIONS = 50
-
-
 def _run_single_repeat(args):
-    """Worker function for one repeat. Designed for multiprocessing.Pool.map.
+    """Worker function for one repeat.
 
-    Optimization: the unweighted fit (200 iters) is computed ONCE per pi_S
-    level and reused as both the baseline and the starting point for all
-    RFTL-S configs. Only the trimmed re-fit (50 iters, warm-started) runs
-    per config, cutting total work by ~4-5x.
+    For each (noise_multiplier, pi_S) pair:
+      1. Inject contamination at the given noise level
+      2. Run baseline MPCA_FD on dirty data (200 iters)
+      3. For each threshold c: identify outliers, remove them, cold re-fit
+         with fresh MPCA_FD (200 iters)
     """
     rep_idx, rep_seed = args
     from motivation_pilot import setup_users, principal_angles_deg
     from my_mpca_02_27_nomean import MPCA_FD
 
     data = _GLOBAL_DATA
-    n_total = len(data)
-
     rng = np.random.RandomState(rep_seed)
-    sample = np.arange(n_total)
+    sample = np.arange(len(data))
     rng.shuffle(sample)
 
     user1, user2, user3 = setup_users(data, sample, SIZES, seed=rep_seed)
     users_centered = [u - np.mean(u, axis=0) for u in [user1, user2, user3]]
 
-    # Clean reference (uncontaminated)
     mpca_clean = MPCA_FD(I_COMMON, RANK)
     mpca_clean.iterations = 200
     mpca_clean.train(
@@ -479,82 +448,88 @@ def _run_single_repeat(args):
     )
     U_star = [u.copy() for u in mpca_clean.U_mat]
 
-    rep_results = {'baseline': {}}
-    for label, *_ in CONFIGS:
-        rep_results[label] = {}
-        rep_results[f'{label}_prec'] = {}
-        rep_results[f'{label}_rec'] = {}
+    rep_results = {}
 
-    for pi_s in PI_S_LEVELS:
-        contam_rng = np.random.RandomState(rep_seed + int(pi_s * 1000))
+    # pi_s=0: no contamination, noise irrelevant — run once
+    mpca_base0 = MPCA_FD(I_COMMON, RANK)
+    mpca_base0.iterations = 200
+    mpca_base0.train(
+        copy.deepcopy(users_centered[0]),
+        copy.deepcopy(users_centered[1]),
+        copy.deepcopy(users_centered[2])
+    )
+    U_b0 = [u.copy() for u in mpca_base0.U_mat]
+    angle_clean = np.mean([a for n in range(3)
+                           for a in principal_angles_deg(U_star[n], U_b0[n])])
+    rep_results[('baseline', 0, 0.0)] = angle_clean
 
-        contaminated_indices = []
-        users_dirty = []
-        for m in range(3):
-            n_samples = users_centered[m].shape[0]
-            n_contam = int(np.ceil(pi_s * n_samples))
-            indices = contam_rng.choice(n_samples, size=n_contam, replace=False) if n_contam > 0 else np.array([], dtype=int)
-            contaminated_indices.append(set(indices))
+    for noise_mult in NOISE_MULTIPLIERS:
+        for pi_s in PI_S_LEVELS:
+            if pi_s == 0.0:
+                continue
 
-            dirty = users_centered[m].copy()
-            if n_contam > 0:
-                noise_std = 10.0 * np.std(users_centered[m])
-                for idx in indices:
-                    dirty[idx] += contam_rng.randn(*dirty[idx].shape) * noise_std
-            users_dirty.append(dirty)
+            contam_rng = np.random.RandomState(rep_seed + int(pi_s * 1000))
 
-        # ONE unweighted fit per pi_S using MPCA_FD (same impl as clean ref)
-        mpca_baseline = MPCA_FD(I_COMMON, RANK)
-        mpca_baseline.iterations = 200
-        mpca_baseline.train(
-            copy.deepcopy(users_dirty[0]),
-            copy.deepcopy(users_dirty[1]),
-            copy.deepcopy(users_dirty[2])
-        )
-        U_unw = [u.copy() for u in mpca_baseline.U_mat]
-        V_unw = [[v.copy() for v in mpca_baseline.V_mat[m]] for m in range(3)]
+            contaminated_indices = []
+            users_dirty = []
+            for m in range(3):
+                n_samples = users_centered[m].shape[0]
+                n_contam = int(np.ceil(pi_s * n_samples))
+                indices = (contam_rng.choice(n_samples, size=n_contam, replace=False)
+                           if n_contam > 0 else np.array([], dtype=int))
+                contaminated_indices.append(set(indices))
 
-        # Baseline angle
-        all_angles_baseline = []
-        for n in range(3):
-            angles = principal_angles_deg(U_star[n], U_unw[n])
-            all_angles_baseline.extend(angles)
-        rep_results['baseline'][pi_s] = np.mean(all_angles_baseline)
+                dirty = users_centered[m].copy()
+                if n_contam > 0:
+                    noise_std = noise_mult * np.std(users_centered[m])
+                    for idx in indices:
+                        dirty[idx] += contam_rng.randn(*dirty[idx].shape) * noise_std
+                users_dirty.append(dirty)
 
-        # Compute residuals ONCE from unweighted fit
-        residuals = [reconstruction_residual(users_dirty[m], V_unw[m], U_unw)
-                     for m in range(3)]
-        all_residuals = np.concatenate(residuals)
-        median_r = np.median(all_residuals)
+            mpca_baseline = MPCA_FD(I_COMMON, RANK)
+            mpca_baseline.iterations = 200
+            mpca_baseline.train(
+                copy.deepcopy(users_dirty[0]),
+                copy.deepcopy(users_dirty[1]),
+                copy.deepcopy(users_dirty[2])
+            )
+            U_unw = [u.copy() for u in mpca_baseline.U_mat]
+            V_unw = [[v.copy() for v in mpca_baseline.V_mat[m]] for m in range(3)]
 
-        # Test each RFTL-S config (only the trimmed re-fit differs)
-        for label, threshold_c, weight_U in CONFIGS:
-            threshold = threshold_c * median_r
-            weights = [np.where(residuals[m] <= threshold, 1.0, 0.0)
-                       for m in range(3)]
-            n_flagged = sum(np.sum(w == 0) for w in weights)
+            angle_base = np.mean([a for n in range(3)
+                                  for a in principal_angles_deg(U_star[n], U_unw[n])])
+            rep_results[('baseline', noise_mult, pi_s)] = angle_base
 
-            if n_flagged > 0:
-                model_trim = MPCA_FD_Weighted(I_COMMON, RANK,
-                                             iterations=REFIT_ITERATIONS,
-                                             weight_U=weight_U)
-                _, U_trim, _ = model_trim.train(
-                    [copy.deepcopy(d) for d in users_dirty],
-                    [w.copy() for w in weights],
-                    init_V=[v[:] for v in V_unw],
-                    init_U=[u.copy() for u in U_unw]
-                )
-                U_result = U_trim
-            else:
-                U_result = U_unw
+            residuals = [reconstruction_residual(users_dirty[m], V_unw[m], U_unw)
+                         for m in range(3)]
+            all_residuals = np.concatenate(residuals)
+            median_r = np.median(all_residuals)
 
-            all_angles = []
-            for n in range(3):
-                angles = principal_angles_deg(U_star[n], U_result[n])
-                all_angles.extend(angles)
-            rep_results[label][pi_s] = np.mean(all_angles)
+            for label, threshold_c in CONFIGS:
+                threshold = threshold_c * median_r
+                weights = [np.where(residuals[m] <= threshold, 1.0, 0.0)
+                           for m in range(3)]
+                n_flagged = sum(np.sum(w == 0) for w in weights)
 
-            if pi_s > 0:
+                if n_flagged > 0:
+                    users_trimmed = [users_dirty[m][weights[m] == 1.0]
+                                     for m in range(3)]
+                    mpca_trimmed = MPCA_FD(I_COMMON, RANK)
+                    mpca_trimmed.iterations = 200
+                    mpca_trimmed.train(
+                        copy.deepcopy(users_trimmed[0]),
+                        copy.deepcopy(users_trimmed[1]),
+                        copy.deepcopy(users_trimmed[2])
+                    )
+                    U_result = [u.copy() for u in mpca_trimmed.U_mat]
+                else:
+                    U_result = U_unw
+
+                angle_trim = np.mean([a for n in range(3)
+                                      for a in principal_angles_deg(U_star[n],
+                                                                    U_result[n])])
+                rep_results[(label, noise_mult, pi_s)] = angle_trim
+
                 tp, fp, fn = 0, 0, 0
                 for m in range(3):
                     flagged = set(np.where(weights[m] == 0.0)[0])
@@ -562,8 +537,10 @@ def _run_single_repeat(args):
                     tp += len(flagged & true_contam)
                     fp += len(flagged - true_contam)
                     fn += len(true_contam - flagged)
-                rep_results[f'{label}_prec'][pi_s] = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-                rep_results[f'{label}_rec'][pi_s] = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                rep_results[(f'{label}_prec', noise_mult, pi_s)] = (
+                    tp / (tp + fp) if (tp + fp) > 0 else 0.0)
+                rep_results[(f'{label}_rec', noise_mult, pi_s)] = (
+                    tp / (tp + fn) if (tp + fn) > 0 else 0.0)
 
     print(f"  Repeat {rep_idx + 1} done (seed={rep_seed}).", flush=True)
     return rep_results
@@ -571,10 +548,6 @@ def _run_single_repeat(args):
 
 def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350,
                           n_workers=4, seed=2024):
-    """
-    Run RFTL-S configurations vs. Chapter 2 baseline under sample contamination.
-    Parallelized across repeats using multiprocessing.
-    """
     import multiprocessing
     from motivation_pilot import load_simulated_data
 
@@ -594,7 +567,8 @@ def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350,
     worker_args = [(i, s) for i, s in enumerate(rep_seeds)]
 
     print(f"Running {n_repeats} repeats across {n_workers} workers...", flush=True)
-    print(f"Configurations: {[c[0] for c in CONFIGS]}", flush=True)
+    print(f"Configs: {[c[0] for c in CONFIGS]}, Noise: {NOISE_MULTIPLIERS}x",
+          flush=True)
 
     if n_workers > 1:
         pool = multiprocessing.Pool(processes=n_workers)
@@ -604,63 +578,68 @@ def run_rftl_s_experiment(data_path, n_repeats=10, max_files=350,
     else:
         all_rep_results = [_run_single_repeat(a) for a in worker_args]
 
-    # Aggregate results
-    results = {'baseline': {pi_s: [] for pi_s in PI_S_LEVELS}}
-    for label, *_ in CONFIGS:
-        results[label] = {pi_s: [] for pi_s in PI_S_LEVELS}
-        results[f'{label}_prec'] = {pi_s: [] for pi_s in PI_S_LEVELS}
-        results[f'{label}_rec'] = {pi_s: [] for pi_s in PI_S_LEVELS}
-
+    results = {}
     for rep in all_rep_results:
-        for pi_s in PI_S_LEVELS:
-            results['baseline'][pi_s].append(rep['baseline'][pi_s])
-            for label, *_ in CONFIGS:
-                results[label][pi_s].append(rep[label][pi_s])
-                if pi_s > 0 and pi_s in rep.get(f'{label}_prec', {}):
-                    results[f'{label}_prec'][pi_s].append(rep[f'{label}_prec'][pi_s])
-                    results[f'{label}_rec'][pi_s].append(rep[f'{label}_rec'][pi_s])
+        for key, val in rep.items():
+            results.setdefault(key, []).append(val)
 
-    return PI_S_LEVELS, results
+    return results
 
 
-def report_rftl_results(pi_s_levels, results):
-    print("\n" + "=" * 90, flush=True)
-    print("RFTL-S EXPERIMENT RESULTS — CONFIGURATION COMPARISON", flush=True)
-    print("=" * 90, flush=True)
-
+def report_rftl_results(results):
     config_labels = [c[0] for c in CONFIGS]
 
-    # Header
-    print("\nMean principal angle (degrees) -- lower is better:", flush=True)
-    header = f"{'pi_S':>6} | {'Baseline':>10}"
-    for label in config_labels:
-        header += f" | {label:>15}"
-    print(header, flush=True)
-    print("-" * 90, flush=True)
-
-    for pi_s in pi_s_levels:
-        b_mean = np.mean(results['baseline'][pi_s])
-        row = f"{pi_s:>6.2f} | {b_mean:>10.2f}"
-        for label in config_labels:
-            r_mean = np.mean(results[label][pi_s])
-            improvement = b_mean - r_mean
-            row += f" | {r_mean:>7.2f} ({improvement:>+.1f})"
-        print(row, flush=True)
-
-    # Precision/recall for each config
-    for label in config_labels:
-        print(f"\nContamination detection — {label} (w < 0.5):", flush=True)
-        print(f"{'pi_S':>6} | {'Precision':>10} | {'Recall':>10}", flush=True)
-        print("-" * 40, flush=True)
-        for pi_s in pi_s_levels:
-            prec_key = f'{label}_prec'
-            rec_key = f'{label}_rec'
-            if pi_s > 0 and results[prec_key][pi_s]:
-                p = np.mean(results[prec_key][pi_s])
-                r = np.mean(results[rec_key][pi_s])
-                print(f"{pi_s:>6.2f} | {p:>10.3f} | {r:>10.3f}", flush=True)
-
+    print("\n" + "=" * 90, flush=True)
+    print("RFTL-S EXPERIMENT RESULTS — COLD RE-FIT", flush=True)
     print("=" * 90, flush=True)
+
+    clean_key = ('baseline', 0, 0.0)
+    if clean_key in results:
+        print(f"\nClean data (pi_S=0.00): baseline = "
+              f"{np.mean(results[clean_key]):.2f} deg", flush=True)
+
+    for noise_mult in NOISE_MULTIPLIERS:
+        print(f"\n--- Noise: {noise_mult}x baseline std ---", flush=True)
+
+        header = f"  {'pi_S':>5} | {'Baseline':>8}"
+        for label in config_labels:
+            header += f" | {label:>14}"
+        print(header, flush=True)
+        print("  " + "-" * (len(header) - 2), flush=True)
+
+        for pi_s in PI_S_LEVELS:
+            if pi_s == 0.0:
+                continue
+            b_key = ('baseline', noise_mult, pi_s)
+            b_mean = np.mean(results.get(b_key, [0]))
+            row = f"  {pi_s:>5.2f} | {b_mean:>8.2f}"
+            for label in config_labels:
+                r_key = (label, noise_mult, pi_s)
+                r_mean = np.mean(results.get(r_key, [0]))
+                improvement = b_mean - r_mean
+                row += f" | {r_mean:>6.2f} ({improvement:>+5.1f})"
+            print(row, flush=True)
+
+        print(f"\n  Detection (noise={noise_mult}x):", flush=True)
+        det_hdr = f"  {'pi_S':>5}"
+        for label in config_labels:
+            det_hdr += f" |  {label} P  {label} R"
+        print(det_hdr, flush=True)
+        print("  " + "-" * (len(det_hdr) - 2), flush=True)
+
+        for pi_s in PI_S_LEVELS:
+            if pi_s == 0.0:
+                continue
+            row = f"  {pi_s:>5.2f}"
+            for label in config_labels:
+                p_key = (f'{label}_prec', noise_mult, pi_s)
+                r_key = (f'{label}_rec', noise_mult, pi_s)
+                p = np.mean(results.get(p_key, [0]))
+                r = np.mean(results.get(r_key, [0]))
+                row += f" | {p:>6.3f} {r:>6.3f}"
+            print(row, flush=True)
+
+    print("\n" + "=" * 90, flush=True)
 
 
 if __name__ == '__main__':
@@ -683,8 +662,8 @@ if __name__ == '__main__':
         print(f"ERROR: Data path not found: {data_path}", flush=True)
         sys.exit(1)
 
-    pi_s_levels, results = run_rftl_s_experiment(
+    results = run_rftl_s_experiment(
         data_path, n_repeats=args.n_repeats, max_files=args.max_files,
         n_workers=args.n_workers
     )
-    report_rftl_results(pi_s_levels, results)
+    report_rftl_results(results)
