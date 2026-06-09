@@ -83,7 +83,7 @@ def prepare_data(X, size, which):
 
 
 def load_data(path):
-    mat_data = loadmat(os.path.join(path, 'ResampleDegImages (1).mat'))
+    mat_data = loadmat(os.path.join(path, 'ResampleDegImages.mat'))
     data = mat_data['ResampleDegImages'][0]
     y = np.array([i[0] for i in mat_data['ResampleTTF']])
     return np.array(data), y
@@ -168,39 +168,48 @@ def best_rank_mape(train_users, test_users, V_dict, U_dict, y_train, y_test):
 
 # ─── Subspace fitting helpers ────────────────────────────────────────────────
 
+MAX_RANK = RANK_CONFIGS[-1]  # [10, 10, 11] — fit once, truncate U for smaller ranks
+
+
 def fit_all_ranks_mpca(train_users):
-    """Train MPCA_FD for all rank configs. Returns V_dict, U_dict keyed by rank tuple."""
+    """Fit MPCA_FD once at max rank, then truncate U for all rank configs."""
+    mpca = MPCA_FD(I_COMMON, MAX_RANK)
+    mpca.iterations = FIT_ITERATIONS
+    mpca.train(
+        copy.deepcopy(train_users[0]),
+        copy.deepcopy(train_users[1]),
+        copy.deepcopy(train_users[2])
+    )
+    V_full = [[v.copy() for v in mpca.V_mat[m]] for m in range(3)]
+    U_full = [u.copy() for u in mpca.U_mat]
+
     V_dict, U_dict = {}, {}
     for rank in RANK_CONFIGS:
-        mpca = MPCA_FD(I_COMMON, rank)
-        mpca.iterations = FIT_ITERATIONS
-        mpca.train(
-            copy.deepcopy(train_users[0]),
-            copy.deepcopy(train_users[1]),
-            copy.deepcopy(train_users[2])
-        )
         rk = tuple(rank)
-        V_dict[rk] = [[v.copy() for v in mpca.V_mat[m]] for m in range(3)]
-        U_dict[rk] = [u.copy() for u in mpca.U_mat]
+        V_dict[rk] = V_full
+        U_dict[rk] = [U_full[mode][:, :rank[mode]] for mode in range(3)]
     return V_dict, U_dict
 
 
 def fit_all_ranks_weighted(train_users, weights):
-    """Train MPCA_FD_Weighted for all rank configs. Returns V_dict, U_dict."""
+    """Fit weighted MPCA_FD once at max rank, then truncate U for all rank configs."""
+    model = MPCA_FD_Weighted(
+        I_COMMON, MAX_RANK,
+        iterations=FIT_ITERATIONS,
+        weight_U=False
+    )
+    _, U_full, V_full = model.train(
+        [copy.deepcopy(d) for d in train_users],
+        [w.copy() for w in weights]
+    )
+    V_full = [[v.copy() for v in V_full[m]] for m in range(3)]
+    U_full = [u.copy() for u in U_full]
+
     V_dict, U_dict = {}, {}
     for rank in RANK_CONFIGS:
-        model = MPCA_FD_Weighted(
-            I_COMMON, rank,
-            iterations=FIT_ITERATIONS,
-            weight_U=False
-        )
-        _, U_mat, V_mat = model.train(
-            [copy.deepcopy(d) for d in train_users],
-            [w.copy() for w in weights]
-        )
         rk = tuple(rank)
-        V_dict[rk] = [[v.copy() for v in V_mat[m]] for m in range(3)]
-        U_dict[rk] = [u.copy() for u in U_mat]
+        V_dict[rk] = V_full
+        U_dict[rk] = [U_full[mode][:, :rank[mode]] for mode in range(3)]
     return V_dict, U_dict
 
 

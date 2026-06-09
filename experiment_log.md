@@ -67,3 +67,49 @@
 - `motivation_pilot_results.png` — motivation plot (2 repeats, 310 samples)
 - `experiment_log.md` — this file
 - `.gitignore` — excludes data/, __pycache__, etc.
+
+---
+
+## 2026-05-04 → 2026-05-16: Sessions 2–4 — RFTL-S Iteration & Variants
+
+### What we did
+
+1. **Iterated on RFTL-S** — fixed mean metric, switched to conservative Huber k=3.0, warm-started IRLS, parallelized experiment runner across repeats.
+2. **Replaced IRLS with hard-trimming one-step estimator** — simpler and more stable.
+3. **Added V-only weighting option** and multi-config comparison experiment.
+4. **Increased iterations** to 200 for convergence; optimized by sharing the unweighted fit and using 50-iter warm-started re-fit.
+5. **Fixed baseline** to use MPCA_FD (same implementation as clean reference) for fair comparison.
+6. **Implemented RFTL-U** (`code/rftl_u.py`) and **RFTL-21** (`code/rftl_21.py`).
+7. **Added cold re-fit and multi-noise RFTL-S** experiments; added cold-start results.
+
+---
+
+## 2026-06-06: Session 5 — Trajectory Change: Prediction-Based Evaluation
+
+### Key decision
+
+**We changed the evaluation approach.** Previously, we measured robustness by comparing subspace angles (principal angles between clean and contaminated factor matrices). We are now evaluating via **prediction performance** instead — specifically, MAPE on log(TTF) using Tucker regression on real degradation data.
+
+**Why the change:** Subspace angles show that contamination distorts the factor matrices, which is useful as a motivation argument (and is kept for that purpose in the motivation pilot). However, the ultimate goal of RFTL is to produce better *predictions* under contamination, not just recover subspaces. Prediction-based comparison on real data is a stronger and more practical evaluation that directly measures what matters for prognostics.
+
+### What we did
+
+1. **Implemented `rftl_s_real.py`** — full prediction pipeline on real bearing degradation data (`ResampleDegImages.mat`), replicating the Chapter 2 pipeline (MPCA_FD → min-max normalize → Ridge → MPCA_beta → Tucker regression → MAPE on log-TTF) with a robustness layer on top.
+2. **Three-way comparison:**
+   - **Clean reference:** MPCA_FD on uncontaminated data (upper bound)
+   - **Baseline:** MPCA_FD on contaminated data (no robustness)
+   - **RFTL-S:** Huber-weighted MPCA_FD re-fit on contaminated data
+3. **Added `tucker_regression0.py`** — Tucker tensor regressor used by the prediction pipeline.
+4. Experiment sweeps multiple contamination levels and noise multipliers with AIC rank selection.
+
+### Current evaluation plan
+
+- **Motivation pilot** (subspace angles) is retained as §3.4.1 — shows contamination breaks the subspace, justifying the need for RFTL.
+- **Prediction experiment** (MAPE on log-TTF) is now the primary evaluation in §3.5 — shows RFTL-S actually improves downstream task performance under contamination.
+
+### What's next
+
+- [ ] Run `rftl_s_real.py` on HPC with 50 repeats across full contamination/noise grid
+- [ ] Add RFTL-U and RFTL-21 to the prediction pipeline for full method comparison
+- [ ] Compile results table: Clean vs Baseline vs RFTL-S vs RFTL-U vs RFTL-21
+- [ ] Finalize motivation plot on HPC with 10 repeats
