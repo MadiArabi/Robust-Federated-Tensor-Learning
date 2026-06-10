@@ -41,15 +41,7 @@ def Uinitial1(x):
     
     lam1 = eitgenvalue[sorted_indices]
     cumulative =[lam1[0]]
-    for index in range(1,len(lam1)):
-        value = lam1[index]+cumulative[-1]
-        cumulative.append(value)
-    cumulative = cumulative/cumulative[-1]
-    return sorted_eigenvectors, cumulative
-
-def Uinitial2(x):
     
-    scatter =  np.zeros((I2,I2))
     for i in range(x.shape[0]):
         scatter +=unfold(x[i,:,:], mode=1)@unfold(x[i,:,:], mode=1).T
         
@@ -91,7 +83,7 @@ def U2(x1,u):
 
 
 u1, cum1 = Uinitial1(Abar)
-u2,cum2 = Uinitial2(Abar)
+u2, cum2 = Uinitial2(Abar)
 
 def phi_calculator(x1,u1,u2):
     phi_frob1 =0
