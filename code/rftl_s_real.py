@@ -58,7 +58,7 @@ RANK_CONFIGS = [
 
 PI_S_LEVELS = [0.0, 0.05, 0.10, 0.20, 0.30]
 NOISE_MULTIPLIERS = [2, 3, 5, 10]
-HUBER_K = 1.345
+HUBER_K_VALUES = [1.0, 1.345, 2.0, 3.0]
 FIT_ITERATIONS = 150
 
 _GLOBAL_DATA = None
@@ -290,7 +290,7 @@ def _run_single_repeat(args):
             )
             rep_results[('baseline', noise_mult, pi_s)] = baseline_mape
 
-            # ─── RFTL-S: compute Huber weights, then weighted re-fit ───
+            # ─── RFTL-S: compute residuals once, then sweep k values ───
             wr = tuple(WEIGHT_RANK)
             V_init = V_base[wr]
             U_init = U_base[wr]
@@ -303,30 +303,31 @@ def _run_single_repeat(args):
             median_r = np.median(all_residuals)
             mad = federated_mad(residuals)
 
-            weights = [
-                huber_weights(residuals[m], median_r, mad, k=HUBER_K)
-                for m in range(3)
-            ]
+            for huber_k in HUBER_K_VALUES:
+                weights = [
+                    huber_weights(residuals[m], median_r, mad, k=huber_k)
+                    for m in range(3)
+                ]
 
-            # Detection metrics
-            tp, fp, fn = 0, 0, 0
-            for m in range(3):
-                flagged = set(np.where(weights[m] < 1.0)[0])
-                tp += len(flagged & contam_indices[m])
-                fp += len(flagged - contam_indices[m])
-                fn += len(contam_indices[m] - flagged)
-            prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-            rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-            rep_results[('rftl_s_prec', noise_mult, pi_s)] = prec
-            rep_results[('rftl_s_rec', noise_mult, pi_s)] = rec
+                # Detection metrics
+                tp, fp, fn = 0, 0, 0
+                for m in range(3):
+                    flagged = set(np.where(weights[m] < 1.0)[0])
+                    tp += len(flagged & contam_indices[m])
+                    fp += len(flagged - contam_indices[m])
+                    fn += len(contam_indices[m] - flagged)
+                prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                rep_results[('rftl_s_prec', noise_mult, pi_s, huber_k)] = prec
+                rep_results[('rftl_s_rec', noise_mult, pi_s, huber_k)] = rec
 
-            # Weighted re-fit for all ranks
-            V_rftl, U_rftl = fit_all_ranks_weighted(train_dirty, weights)
+                # Weighted re-fit for all ranks
+                V_rftl, U_rftl = fit_all_ranks_weighted(train_dirty, weights)
 
-            rftl_mape = best_rank_mape(
-                train_dirty, test_users, V_rftl, U_rftl, y_train, y_test
-            )
-            rep_results[('rftl_s', noise_mult, pi_s)] = rftl_mape
+                rftl_mape = best_rank_mape(
+                    train_dirty, test_users, V_rftl, U_rftl, y_train, y_test
+                )
+                rep_results[('rftl_s', noise_mult, pi_s, huber_k)] = rftl_mape
 
     print(f"  Repeat {rep_idx + 1} done (seed={rep_seed}).", flush=True)
     return rep_results
@@ -355,7 +356,7 @@ def run_experiment(data_path, n_repeats=50, n_workers=4, seed=2024):
     print(f"Running {n_repeats} repeats across {n_workers} workers...", flush=True)
     print(f"  Sizes: {SIZES}, Ranks: {len(RANK_CONFIGS)} configs", flush=True)
     print(f"  Noise: {NOISE_MULTIPLIERS}x, pi_S: {PI_S_LEVELS}", flush=True)
-    print(f"  Huber k={HUBER_K}, weight_U=False, iterations={FIT_ITERATIONS}",
+    print(f"  Huber k={HUBER_K_VALUES}, weight_U=False, iterations={FIT_ITERATIONS}",
           flush=True)
 
     start = time.time()
@@ -381,9 +382,9 @@ def run_experiment(data_path, n_repeats=50, n_workers=4, seed=2024):
 # ─── Reporting ───────────────────────────────────────────────────────────────
 
 def report_results(results, output_dir=None):
-    print("\n" + "=" * 95, flush=True)
+    print("\n" + "=" * 105, flush=True)
     print("RFTL-S PREDICTION RESULTS — REAL DATA (MAPE on log-TTF)", flush=True)
-    print("=" * 95, flush=True)
+    print("=" * 105, flush=True)
 
     clean_vals = results.get(('clean', 0, 0.0), [])
     if clean_vals:
@@ -394,49 +395,56 @@ def report_results(results, output_dir=None):
 
     for noise_mult in NOISE_MULTIPLIERS:
         print(f"\n--- Noise: {noise_mult}x std ---", flush=True)
-        header = f"  {'pi_S':>5} | {'Baseline':>16} | {'RFTL-S':>16} | {'Improv':>7} | {'Prec':>5} {'Rec':>5}"
-        print(header, flush=True)
-        print("  " + "-" * (len(header) - 2), flush=True)
+        for huber_k in HUBER_K_VALUES:
+            print(f"\n  Huber k={huber_k}:", flush=True)
+            header = f"    {'pi_S':>5} | {'Baseline':>16} | {'RFTL-S':>16} | {'Improv':>7} | {'Prec':>5} {'Rec':>5}"
+            print(header, flush=True)
+            print("    " + "-" * (len(header) - 4), flush=True)
 
-        for pi_s in PI_S_LEVELS:
-            if pi_s == 0.0:
-                continue
+            for pi_s in PI_S_LEVELS:
+                if pi_s == 0.0:
+                    continue
 
-            b_key = ('baseline', noise_mult, pi_s)
-            r_key = ('rftl_s', noise_mult, pi_s)
-            p_key = ('rftl_s_prec', noise_mult, pi_s)
-            rc_key = ('rftl_s_rec', noise_mult, pi_s)
+                b_key = ('baseline', noise_mult, pi_s)
+                r_key = ('rftl_s', noise_mult, pi_s, huber_k)
+                p_key = ('rftl_s_prec', noise_mult, pi_s, huber_k)
+                rc_key = ('rftl_s_rec', noise_mult, pi_s, huber_k)
 
-            b_vals = [v for v in results.get(b_key, []) if v is not None]
-            r_vals = [v for v in results.get(r_key, []) if v is not None]
-            p_vals = results.get(p_key, [])
-            rc_vals = results.get(rc_key, [])
+                b_vals = [v for v in results.get(b_key, []) if v is not None]
+                r_vals = [v for v in results.get(r_key, []) if v is not None]
+                p_vals = results.get(p_key, [])
+                rc_vals = results.get(rc_key, [])
 
-            if b_vals and r_vals:
-                b_mean = np.mean(b_vals)
-                b_std = np.std(b_vals)
-                r_mean = np.mean(r_vals)
-                r_std = np.std(r_vals)
-                improv = (b_mean - r_mean) / b_mean * 100 if b_mean > 0 else 0
-                prec = np.mean(p_vals) if p_vals else 0
-                rec = np.mean(rc_vals) if rc_vals else 0
-                print(f"  {pi_s:>5.2f} | {b_mean:.4f}+/-{b_std:.4f}"
-                      f" | {r_mean:.4f}+/-{r_std:.4f}"
-                      f" | {improv:>+6.1f}% | {prec:.3f} {rec:.3f}",
-                      flush=True)
+                if b_vals and r_vals:
+                    b_mean = np.mean(b_vals)
+                    b_std = np.std(b_vals)
+                    r_mean = np.mean(r_vals)
+                    r_std = np.std(r_vals)
+                    improv = (b_mean - r_mean) / b_mean * 100 if b_mean > 0 else 0
+                    prec = np.mean(p_vals) if p_vals else 0
+                    rec = np.mean(rc_vals) if rc_vals else 0
+                    print(f"    {pi_s:>5.2f} | {b_mean:.4f}+/-{b_std:.4f}"
+                          f" | {r_mean:.4f}+/-{r_std:.4f}"
+                          f" | {improv:>+6.1f}% | {prec:.3f} {rec:.3f}",
+                          flush=True)
 
-    print("\n" + "=" * 95, flush=True)
+    print("\n" + "=" * 105, flush=True)
 
     # Save to CSV
     if output_dir:
         rows = []
         for key, vals in results.items():
-            method, noise, pi_s = key
+            if len(key) == 3:
+                method, noise, pi_s = key
+                huber_k = None
+            else:
+                method, noise, pi_s, huber_k = key
             for rep_idx, val in enumerate(vals):
                 if val is not None:
                     rows.append({
                         'method': method, 'noise_mult': noise,
-                        'pi_s': pi_s, 'repeat': rep_idx, 'value': val
+                        'pi_s': pi_s, 'huber_k': huber_k,
+                        'repeat': rep_idx, 'value': val
                     })
         df = pd.DataFrame(rows)
         csv_path = os.path.join(output_dir, 'rftl_s_real_results.csv')
