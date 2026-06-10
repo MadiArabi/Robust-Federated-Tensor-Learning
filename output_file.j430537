@@ -1,0 +1,134 @@
+Loading real degradation data...
+  Loaded 284 samples, 284 TTF values
+Running 10 repeats across 10 workers...
+  Sizes: [45, 50, 55], Ranks: 9 configs
+  Noise: [2, 3, 5, 10]x, pi_S: [0.0, 0.05, 0.1, 0.2, 0.3]
+  Huber k=1.345, weight_U=False, iterations=150
+  Repeat 3 done (seed=51809).
+  Repeat 1 done (seed=7817).
+  Repeat 10 done (seed=61378).
+  Repeat 7 done (seed=68031).
+  Repeat 8 done (seed=49336).
+  Repeat 5 done (seed=47644).
+  Repeat 4 done (seed=35457).
+  Repeat 9 done (seed=7978).
+  Repeat 6 done (seed=95781).
+  Repeat 2 done (seed=52731).
+
+Done in 10.68 hours.
+
+===============================================================================================
+RFTL-S PREDICTION RESULTS — REAL DATA (MAPE on log-TTF)
+===============================================================================================
+
+Clean reference: MAPE = 0.0710 +/- 0.0181
+
+--- Noise: 2x std ---
+   pi_S |         Baseline |           RFTL-S |  Improv |  Prec   Rec
+  -------------------------------------------------------------------
+   0.05 | 0.0596+/-0.0095 | 0.0700+/-0.0111 |  -17.4% | 0.221 1.000
+   0.10 | 0.0701+/-0.0134 | 0.0636+/-0.0121 |   +9.3% | 0.337 1.000
+   0.20 | 0.0642+/-0.0090 | 0.0597+/-0.0097 |   +7.1% | 0.509 1.000
+   0.30 | 0.0683+/-0.0184 | 0.0696+/-0.0165 |   -2.0% | 0.819 1.000
+
+--- Noise: 3x std ---
+   pi_S |         Baseline |           RFTL-S |  Improv |  Prec   Rec
+  -------------------------------------------------------------------
+   0.05 | 0.0636+/-0.0117 | 0.0646+/-0.0146 |   -1.6% | 0.207 1.000
+   0.10 | 0.0652+/-0.0135 | 0.0615+/-0.0159 |   +5.7% | 0.308 1.000
+   0.20 | 0.0593+/-0.0144 | 0.0604+/-0.0138 |   -1.9% | 0.521 1.000
+   0.30 | 0.0621+/-0.0141 | 0.0647+/-0.0100 |   -4.1% | 0.819 1.000
+
+--- Noise: 5x std ---
+   pi_S |         Baseline |           RFTL-S |  Improv |  Prec   Rec
+  -------------------------------------------------------------------
+   0.05 | 0.0618+/-0.0101 | 0.0526+/-0.0139 |  +14.9% | 0.188 1.000
+   0.10 | 0.0608+/-0.0166 | 0.0661+/-0.0119 |   -8.7% | 0.328 1.000
+   0.20 | 0.0727+/-0.0123 | 0.0622+/-0.0188 |  +14.5% | 0.498 1.000
+   0.30 | 0.0585+/-0.0114 | 0.0665+/-0.0123 |  -13.6% | 0.789 1.000
+
+--- Noise: 10x std ---
+   pi_S |         Baseline |           RFTL-S |  Improv |  Prec   Rec
+  -------------------------------------------------------------------
+   0.05 | 0.0538+/-0.0107 | 0.0597+/-0.0083 |  -11.0% | 0.176 1.000
+   0.10 | 0.0523+/-0.0069 | 0.0577+/-0.0126 |  -10.4% | 0.293 1.000
+   0.20 | 0.0569+/-0.0117 | 0.0636+/-0.0121 |  -11.9% | 0.525 1.000
+   0.30 | 0.0566+/-0.0090 | 0.0740+/-0.0128 |  -30.6% | 0.797 1.000
+
+===============================================================================================
+
+Results saved to /rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/output/rftl_s_real_results.csv
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@c017n01>
+Subject: Job 430537: <my_python_job> in cluster <Hazel> Done
+
+Job <my_python_job> was submitted from host <login01.hpc.ncsu.edu> by user <sarabi> in cluster <Hazel> at Tue Jun  9 20:32:08 2026
+Job was executed on host(s) <1*c017n01>, in queue <single_chassis>, as user <sarabi> in cluster <Hazel> at Tue Jun  9 20:32:09 2026
+                            <1*c015n03>
+                            <1*c018n01>
+                            <1*c014n01>
+                            <1*c014n02>
+                            <2*c018n03>
+                            <1*c018n02>
+</tmp/.lsbtmp290932> was used as the home directory.
+</rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning> was used as the working directory.
+Started at Tue Jun  9 20:32:09 2026
+Terminated at Wed Jun 10 07:13:15 2026
+Results reported at Wed Jun 10 07:13:15 2026
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+# LSBATCH: User input
+#!/bin/bash
+#BSUB -n 8
+#BSUB -W 2400
+#BSUB -R "rusage[mem=8]"
+#BSUB -o output_file.j%J
+#BSUB -e error_file.j%J
+#BSUB -J my_python_job
+
+
+source ~/.bashrc
+conda activate  /usr/local/usrapps/iselingzhang/sarabi/tensorimage
+
+# Run experiments
+#DATA="data/Simulated Data/Simulated Data"
+
+#echo "=== RFTL-S ==="
+#python3 code/rftl_s.py --data-path "$DATA" --n-repeats 10 --n-workers 8
+
+#echo "=== RFTL-U ==="
+#python3 code/rftl_u.py --data-path "$DATA" --n-repeats 10 --n-workers 8
+
+#echo "=== RFTL-21 ==="
+#python3 code/rftl_21.py --data-path "$DATA" --n-repeats 10 --n-workers 8
+python code/rftl_s_real.py --data-path /rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/data/ --n-repeats 10 --n-workers 10 --output-dir /rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/output/
+
+------------------------------------------------------------
+
+Successfully completed.
+
+Resource usage summary:
+
+    CPU time :                                   38181.63 sec.
+    Max Memory :                                 1 GB
+    Average Memory :                             1.00 GB
+    Total Requested Memory :                     56.00 GB
+    Delta Memory :                               55.00 GB
+    Max Swap :                                   -
+    Max Processes :                              14
+    Max Threads :                                19
+    Run time :                                   38474 sec.
+    Turnaround time :                            38467 sec.
+
+The output (if any) is above this job summary.
+
+
+
+PS:
+
+Read file <error_file.j430537> for stderr output of this job.
+
