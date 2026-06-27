@@ -1,0 +1,115 @@
+Loading real degradation data...
+  Loaded 284 samples, 284 TTF values
+Running 50 repeats across 10 workers...
+  Sizes: [45, 50, 55], Ranks: 9 configs
+  Noise: [2, 3, 5, 10]x, pi_S: [0.0, 0.05, 0.1, 0.2, 0.3]
+  Huber k=[1.0, 1.345, 2.0, 3.0], weight_U=False, iterations=150
+  Repeat 13 done (seed=24651).
+  Repeat 7 done (seed=68031).
+  Repeat 15 done (seed=17917).
+  Repeat 1 done (seed=7817).
+  Repeat 17 done (seed=12447).
+  Repeat 19 done (seed=45304).
+  Repeat 3 done (seed=51809).
+  Repeat 11 done (seed=317).
+  Repeat 5 done (seed=47644).
+  Repeat 9 done (seed=7978).
+  Repeat 2 done (seed=52731).
+  Repeat 8 done (seed=49336).
+  Repeat 20 done (seed=18635).
+  Repeat 4 done (seed=35457).
+  Repeat 16 done (seed=99314).
+  Repeat 18 done (seed=12656).
+  Repeat 10 done (seed=61378).
+  Repeat 14 done (seed=78147).
+  Repeat 6 done (seed=95781).
+  Repeat 12 done (seed=26852).
+  Repeat 23 done (seed=69132).
+  Repeat 21 done (seed=4448).
+  Repeat 25 done (seed=4188).
+  Repeat 33 done (seed=78624).
+  Repeat 29 done (seed=53095).
+  Repeat 27 done (seed=5175).
+  Repeat 35 done (seed=151).
+  Repeat 31 done (seed=35573).
+  Repeat 37 done (seed=11846).
+  Repeat 39 done (seed=46981).
+  Repeat 24 done (seed=32541).
+  Repeat 34 done (seed=2146).
+  Repeat 26 done (seed=4136).
+  Repeat 22 done (seed=51568).
+  Repeat 28 done (seed=27466).
+  Repeat 30 done (seed=51931).
+  Repeat 38 done (seed=22516).
+  Repeat 36 done (seed=95063).
+  Repeat 32 done (seed=65067).
+  Repeat 40 done (seed=19002).
+  Repeat 41 done (seed=76375).
+  Repeat 43 done (seed=1429).
+  Repeat 49 done (seed=14001).
+  Repeat 45 done (seed=73865).
+  Repeat 47 done (seed=55131).
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@c019n02>
+Subject: Job 433474: <my_python_job> in cluster <Hazel> Exited
+
+Job <my_python_job> was submitted from host <login01.hpc.ncsu.edu> by user <sarabi> in cluster <Hazel> at Wed Jun 10 18:22:17 2026
+Job was executed on host(s) <1*c019n02>, in queue <long>, as user <sarabi> in cluster <Hazel> at Wed Jun 10 18:22:19 2026
+                            <1*c018n02>
+                            <1*c015n03>
+                            <1*c014n02>
+                            <3*c017n01>
+                            <1*c016n03>
+</tmp/.lsbtmp290932> was used as the home directory.
+</rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning> was used as the working directory.
+Started at Wed Jun 10 18:22:19 2026
+Terminated at Mon Jun 15 18:22:27 2026
+Results reported at Mon Jun 15 18:22:27 2026
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+# LSBATCH: User input
+#!/bin/bash
+#BSUB -n 8
+#BSUB -W 7200
+#BSUB -R "rusage[mem=8]"
+#BSUB -o output_file.j%J
+#BSUB -e error_file.j%J
+#BSUB -J my_python_job
+
+
+source ~/.bashrc
+conda activate  /usr/local/usrapps/iselingzhang/sarabi/tensorimage
+
+# Run RFTL-S on real degradation data
+python code/rftl_s_real.py --data-path /rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/data/ --n-repeats 50 --n-workers 10 --output-dir /rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/output/
+
+------------------------------------------------------------
+
+TERM_RUNLIMIT: job killed after reaching LSF run time limit.
+Exited with exit code 140.
+
+Resource usage summary:
+
+    CPU time :                                   429314.00 sec.
+    Max Memory :                                 1 GB
+    Average Memory :                             1.00 GB
+    Total Requested Memory :                     48.00 GB
+    Delta Memory :                               47.00 GB
+    Max Swap :                                   -
+    Max Processes :                              14
+    Max Threads :                                19
+    Run time :                                   432012 sec.
+    Turnaround time :                            432010 sec.
+
+The output (if any) is above this job summary.
+
+
+
+PS:
+
+Read file <error_file.j433474> for stderr output of this job.
+
