@@ -30,6 +30,7 @@ import numpy as np
 import copy
 import random
 import time
+import json
 import multiprocessing
 import pandas as pd
 import sklearn
@@ -63,6 +64,52 @@ FIT_ITERATIONS = 150
 
 _GLOBAL_DATA = None
 _GLOBAL_Y = None
+_GLOBAL_OUTPUT_DIR = None
+
+
+def _save_repeat_result(rep_idx, rep_seed, rep_results, output_dir):
+    """Save a single repeat's results to a JSON file immediately."""
+    if output_dir is None:
+        return
+    checkpoint_dir = os.path.join(output_dir, 'checkpoints')
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    serializable = {}
+    for key, val in rep_results.items():
+        str_key = '|'.join(str(k) for k in key)
+        serializable[str_key] = val
+    path = os.path.join(checkpoint_dir, f'repeat_{rep_idx:03d}_seed{rep_seed}.json')
+    with open(path, 'w') as f:
+        json.dump(serializable, f)
+
+
+def _load_checkpoint_results(output_dir):
+    """Load all saved per-repeat checkpoint files and return aggregated results."""
+    checkpoint_dir = os.path.join(output_dir, 'checkpoints')
+    if not os.path.isdir(checkpoint_dir):
+        return {}, set()
+    results = {}
+    completed = set()
+    for fname in sorted(os.listdir(checkpoint_dir)):
+        if not fname.endswith('.json'):
+            continue
+        rep_idx = int(fname.split('_')[1])
+        completed.add(rep_idx)
+        with open(os.path.join(checkpoint_dir, fname)) as f:
+            data = json.load(f)
+        for str_key, val in data.items():
+            parts = str_key.split('|')
+            key = []
+            for p in parts:
+                try:
+                    key.append(int(p))
+                except ValueError:
+                    try:
+                        key.append(float(p))
+                    except ValueError:
+                        key.append(p)
+            key = tuple(key)
+            results.setdefault(key, []).append(val)
+    return results, completed
 
 
 # ─── Data helpers (same as Chapter 2) ────────────────────────────────────────
@@ -329,14 +376,17 @@ def _run_single_repeat(args):
                 )
                 rep_results[('rftl_s', noise_mult, pi_s, huber_k)] = rftl_mape
 
+    _save_repeat_result(rep_idx, rep_seed, rep_results, _GLOBAL_OUTPUT_DIR)
     print(f"  Repeat {rep_idx + 1} done (seed={rep_seed}).", flush=True)
     return rep_results
 
 
 # ─── Experiment runner ───────────────────────────────────────────────────────
 
-def run_experiment(data_path, n_repeats=50, n_workers=4, seed=2024):
-    global _GLOBAL_DATA, _GLOBAL_Y
+def run_experiment(data_path, n_repeats=50, n_workers=4, seed=2024,
+                   output_dir=None):
+    global _GLOBAL_DATA, _GLOBAL_Y, _GLOBAL_OUTPUT_DIR
+    _GLOBAL_OUTPUT_DIR = output_dir
 
     print("Loading real degradation data...", flush=True)
     _GLOBAL_DATA, _GLOBAL_Y = load_data(data_path)
@@ -351,9 +401,26 @@ def run_experiment(data_path, n_repeats=50, n_workers=4, seed=2024):
 
     master_rng = np.random.RandomState(seed)
     rep_seeds = [int(master_rng.randint(1, 100000)) for _ in range(n_repeats)]
-    worker_args = [(i, s) for i, s in enumerate(rep_seeds)]
 
-    print(f"Running {n_repeats} repeats across {n_workers} workers...", flush=True)
+    # Resume: skip repeats that already have saved checkpoints
+    already_done = set()
+    if output_dir:
+        _, already_done = _load_checkpoint_results(output_dir)
+        if already_done:
+            print(f"  Resuming: {len(already_done)} repeats already saved, "
+                  f"{n_repeats - len(already_done)} remaining.", flush=True)
+
+    worker_args = [(i, s) for i, s in enumerate(rep_seeds)
+                   if i not in already_done]
+
+    if not worker_args:
+        print("  All repeats already completed! Loading from checkpoints.",
+              flush=True)
+        results, _ = _load_checkpoint_results(output_dir)
+        return results
+
+    print(f"Running {len(worker_args)} repeats across {n_workers} workers...",
+          flush=True)
     print(f"  Sizes: {SIZES}, Ranks: {len(RANK_CONFIGS)} configs", flush=True)
     print(f"  Noise: {NOISE_MULTIPLIERS}x, pi_S: {PI_S_LEVELS}", flush=True)
     print(f"  Huber k={HUBER_K_VALUES}, weight_U=False, iterations={FIT_ITERATIONS}",
@@ -369,11 +436,14 @@ def run_experiment(data_path, n_repeats=50, n_workers=4, seed=2024):
         all_rep = [_run_single_repeat(a) for a in worker_args]
     elapsed = (time.time() - start) / 3600
 
-    # Aggregate
-    results = {}
-    for rep in all_rep:
-        for key, val in rep.items():
-            results.setdefault(key, []).append(val)
+    # Load all results (checkpointed + just completed)
+    if output_dir:
+        results, _ = _load_checkpoint_results(output_dir)
+    else:
+        results = {}
+        for rep in all_rep:
+            for key, val in rep.items():
+                results.setdefault(key, []).append(val)
 
     print(f"\nDone in {elapsed:.2f} hours.", flush=True)
     return results
@@ -474,7 +544,11 @@ if __name__ == '__main__':
         print(f"ERROR: Data path not found: {data_path}", flush=True)
         sys.exit(1)
 
+    if args.output_dir:
+        os.makedirs(args.output_dir, exist_ok=True)
+
     results = run_experiment(
-        data_path, n_repeats=args.n_repeats, n_workers=args.n_workers
+        data_path, n_repeats=args.n_repeats, n_workers=args.n_workers,
+        output_dir=args.output_dir
     )
     report_results(results, output_dir=args.output_dir)

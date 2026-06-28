@@ -1,7 +1,7 @@
 # LSBATCH: User input
 #!/bin/bash
 #BSUB -n 8
-#BSUB -W 7200
+#BSUB -W 8640
 #BSUB -R "rusage[mem=8]"
 #BSUB -o output_file.j%J
 #BSUB -e error_file.j%J
