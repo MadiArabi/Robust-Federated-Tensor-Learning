@@ -1,17 +1,28 @@
 """
 RFTL-S Prediction Experiment on Real Degradation Data
+(structured test-side contamination — July 2026 redesign)
 
-Identical pipeline to Chapter 2 (onepass-real-03-21-2.py) with:
-  1. Contamination injection into training samples
-  2. Huber-weighted MPCA_FD to handle compromised samples
-  3. Prediction comparison: baseline vs RFTL-S
+Identical prediction pipeline to Chapter 2 (onepass-real-03-21-2.py), with a
+faulty-camera contamination scenario: user 0's camera produces a fixed
+structured artifact (hot-pixel block or readout stripes) that corrupts BOTH
+its training and its test images (contamination.contaminate_train_and_test).
+The June 2026 run showed train-only contamination is largely absorbed by the
+min-max -> Ridge -> Tucker stack; test-side contamination is where robustness
+can pay off.
 
-Comparison:
-  - Clean: MPCA_FD on clean data (upper bound)
-  - Baseline: MPCA_FD on contaminated data (no robustness)
-  - RFTL-S: Huber weights -> Weighted MPCA_FD re-fit (with robustness)
+Four-way comparison per condition:
+  - clean:    clean train -> clean test   (camera never broke; upper bound)
+  - oracle:   clean-train factors -> dirty test  (perfect robust estimator:
+              robustness can fix the subspace, not the test images)
+  - baseline: MPCA_FD on dirty train -> dirty test  (no robustness)
+  - rftl_s:   Huber-weighted MPCA_FD re-fit on dirty train -> dirty test
 
-Evaluation: MAPE on log(TTF) with AIC rank selection, same as Chapter 2.
+Evaluation: full error distribution on log-TTF — mean (MAPE), median,
+q25/q75 of |predicted - true| / |true| — overall and per user, with AIC rank
+selection, same as Chapter 2.
+
+NOTE: checkpoints from the June 2026 Gaussian run use different keys/values
+and are NOT resume-compatible — always use a fresh --output-dir.
 
 Usage:
     python rftl_s_real.py --data-path /path/to/data --n-repeats 50
@@ -42,6 +53,7 @@ from tensorly.tenalg import multi_mode_dot
 from my_mpca_02_27_nomean import MPCA_FD, MPCA_beta, train_test
 from rftl_s import (MPCA_FD_Weighted, reconstruction_residual,
                      federated_mad, huber_weights)
+from contamination import contaminate_train_and_test
 import tucker_regression0
 
 
@@ -57,14 +69,34 @@ RANK_CONFIGS = [
     [6, 6, 7], [7, 7, 9], [8, 8, 9], [9, 9, 11], [10, 10, 11]
 ]
 
-PI_S_LEVELS = [0.0, 0.05, 0.10, 0.20, 0.30]
-NOISE_MULTIPLIERS = [2, 3, 5, 10]
-HUBER_K_VALUES = [1.0, 1.345, 2.0, 3.0]
+# Contamination grid — HPC configuration (2026-07-12).
+# k sweep reduced to {1.345, 3.0}: the June run showed k does not move MAPE.
+CONTAM_MODES = ['hot_block', 'stripe']
+PI_S_LEVELS = [0.3, 0.6, 1.0]   # fault rate of user 0, train AND test
+AMPLITUDE = 10.0
+BLOCK_SIZE = 9
+N_STRIPES = 6
+TARGET_USER = 0
+
+HUBER_K_VALUES = [1.345, 3.0]
+
+# RFTL-S-IRLS ablation (task-dependence of robustness): IRLS improves
+# detection, which monitoring needs — but a cleaner subspace pushes the
+# estimator toward the collapsed oracle under persistent test-side faults.
+# Run both variants to demonstrate the tension empirically.
+IRLS_ROUNDS = 5
+IRLS_INNER_ITERATIONS = 5
 FIT_ITERATIONS = 150
 
 _GLOBAL_DATA = None
 _GLOBAL_Y = None
 _GLOBAL_OUTPUT_DIR = None
+
+
+def _init_worker(data, y, output_dir):
+    """Pool initializer — required on Windows (spawn), harmless under fork."""
+    global _GLOBAL_DATA, _GLOBAL_Y, _GLOBAL_OUTPUT_DIR
+    _GLOBAL_DATA, _GLOBAL_Y, _GLOBAL_OUTPUT_DIR = data, y, output_dir
 
 
 def _save_repeat_result(rep_idx, rep_seed, rep_results, output_dir):
@@ -153,7 +185,7 @@ def project_data(users, V_mat, U_mat):
 def prediction_pipeline(prime_train, prime_test, y_train, y_test):
     """
     Min-max scale -> Ridge -> MPCA_beta -> Tucker regression -> predict -> MAPE.
-    Returns (mape, aic) or (None, inf) on failure.
+    Returns (mape, aic, rel_errors) or (None, inf, None) on failure.
     """
     Min = np.min(prime_train, axis=0)
     Max = np.max(prime_train, axis=0)
@@ -187,17 +219,37 @@ def prediction_pipeline(prime_train, prime_test, y_train, y_test):
         abs_diff = np.abs(predicted) - np.abs(np.log(y_test))
         RSS = np.mean(abs_diff ** 2)
         AIC = len(predicted) * np.log(RSS) + P1_b * P2_b * P3_b
-        mape = np.mean(np.abs(abs_diff) / np.abs(np.log(y_test)))
+        rel_errors = abs_diff / np.abs(np.log(y_test))
+        mape = np.mean(np.abs(rel_errors))
 
-        return mape, AIC
+        return mape, AIC, rel_errors
     except Exception:
-        return None, np.inf
+        return None, np.inf, None
 
 
-def best_rank_mape(train_users, test_users, V_dict, U_dict, y_train, y_test):
-    """Try all rank configs, return best MAPE (AIC-selected)."""
+def error_stats(rel_errors):
+    """Distribution of absolute relative errors, overall and per user.
+
+    rel_errors is ordered [user A test (20), user B test (20), user C (20)].
+    """
+    abs_rel = np.abs(rel_errors)
+    stats = {
+        'mape': float(np.mean(abs_rel)),
+        'median': float(np.median(abs_rel)),
+        'q25': float(np.percentile(abs_rel, 25)),
+        'q75': float(np.percentile(abs_rel, 75)),
+    }
+    for u in range(3):
+        chunk = abs_rel[u * TEST_SIZE:(u + 1) * TEST_SIZE]
+        stats[f'mape_user{u}'] = float(np.mean(chunk))
+        stats[f'median_user{u}'] = float(np.median(chunk))
+    return stats
+
+
+def best_rank_stats(train_users, test_users, V_dict, U_dict, y_train, y_test):
+    """Try all rank configs, return error stats dict of the AIC-selected one."""
     best_aic = np.inf
-    best_mape = None
+    best_stats = None
 
     for rank in RANK_CONFIGS:
         rk = tuple(rank)
@@ -205,12 +257,12 @@ def best_rank_mape(train_users, test_users, V_dict, U_dict, y_train, y_test):
             continue
         prime_train = project_data(train_users, V_dict[rk], U_dict[rk])
         prime_test = project_data(test_users, V_dict[rk], U_dict[rk])
-        mape, aic = prediction_pipeline(prime_train, prime_test, y_train, y_test)
+        mape, aic, rel_errors = prediction_pipeline(prime_train, prime_test, y_train, y_test)
         if mape is not None and aic < best_aic:
             best_aic = aic
-            best_mape = mape
+            best_stats = {'selected_rank': str(rank), **error_stats(rel_errors)}
 
-    return best_mape
+    return best_stats
 
 
 # ─── Subspace fitting helpers ────────────────────────────────────────────────
@@ -290,91 +342,117 @@ def _run_single_repeat(args):
     Cbar, C_test, y_C_train, y_C_test = train_test(user3, y_C, TEST_SIZE)
 
     train_clean = [Abar.copy(), Bbar.copy(), Cbar.copy()]
-    test_users = [A_test, B_test, C_test]
+    test_clean = [A_test, B_test, C_test]
     y_train = np.concatenate([y_A_train, y_B_train, y_C_train])
     y_test = np.concatenate([y_A_test, y_B_test, y_C_test])
 
     rep_results = {}
 
-    # ─── Clean reference ───
+    # ─── Clean reference (camera never broke) ───
     V_clean, U_clean = fit_all_ranks_mpca(train_clean)
-    clean_mape = best_rank_mape(
-        train_clean, test_users, V_clean, U_clean, y_train, y_test
+    rep_results[('clean', 'none', 0.0)] = best_rank_stats(
+        train_clean, test_clean, V_clean, U_clean, y_train, y_test
     )
-    rep_results[('clean', 0, 0.0)] = clean_mape
 
     # ─── Contamination experiments ───
-    for noise_mult in NOISE_MULTIPLIERS:
-        for pi_s in PI_S_LEVELS:
-            if pi_s == 0.0:
-                continue
+    conditions = [(m, p) for m in CONTAM_MODES for p in PI_S_LEVELS]
+    for cond_idx, (mode, pi_s) in enumerate(conditions):
+        # Separate RNG so main state is unaffected; keyed on the condition
+        # index (str hash is randomized per process)
+        contam_rng = np.random.RandomState(
+            rep_seed + 1000 * (cond_idx + 1) + int(pi_s * 100)
+        )
+        train_dirty, contam_indices, test_dirty, _ = contaminate_train_and_test(
+            train_clean, test_clean, pi_s, mode, contam_rng,
+            amplitude=AMPLITUDE, block_size=BLOCK_SIZE, n_stripes=N_STRIPES,
+            target_user=TARGET_USER
+        )
 
-            # Contaminate (separate RNG so main state is unaffected)
-            contam_rng = np.random.RandomState(
-                rep_seed + int(noise_mult * 100) + int(pi_s * 1000)
-            )
-            train_dirty = []
-            contam_indices = []
-            for m in range(3):
-                dirty = train_clean[m].copy()
-                n_samples = dirty.shape[0]
-                n_contam = int(np.ceil(pi_s * n_samples))
-                if n_contam > 0:
-                    idx = contam_rng.choice(n_samples, size=n_contam, replace=False)
-                    noise_std = noise_mult * np.std(train_clean[m])
-                    for i in idx:
-                        dirty[i] += contam_rng.randn(*dirty[i].shape) * noise_std
-                    contam_indices.append(set(idx))
-                else:
-                    contam_indices.append(set())
-                train_dirty.append(dirty)
+        # ─── Oracle: clean-train factors, contaminated test images ───
+        rep_results[('oracle', mode, pi_s)] = best_rank_stats(
+            train_clean, test_dirty, V_clean, U_clean, y_train, y_test
+        )
 
-            # ─── Baseline: unweighted MPCA_FD on dirty data ───
-            V_base, U_base = fit_all_ranks_mpca(train_dirty)
+        # ─── Baseline: unweighted MPCA_FD on dirty data ───
+        V_base, U_base = fit_all_ranks_mpca(train_dirty)
+        rep_results[('baseline', mode, pi_s)] = best_rank_stats(
+            train_dirty, test_dirty, V_base, U_base, y_train, y_test
+        )
 
-            baseline_mape = best_rank_mape(
-                train_dirty, test_users, V_base, U_base, y_train, y_test
-            )
-            rep_results[('baseline', noise_mult, pi_s)] = baseline_mape
+        # ─── RFTL-S: compute residuals once, then sweep k values ───
+        wr = tuple(WEIGHT_RANK)
+        V_init = V_base[wr]
+        U_init = U_base[wr]
 
-            # ─── RFTL-S: compute residuals once, then sweep k values ───
-            wr = tuple(WEIGHT_RANK)
-            V_init = V_base[wr]
-            U_init = U_base[wr]
+        residuals = [
+            reconstruction_residual(train_dirty[m], V_init[m], U_init)
+            for m in range(3)
+        ]
+        all_residuals = np.concatenate(residuals)
+        median_r = np.median(all_residuals)
+        mad = federated_mad(residuals)
 
-            residuals = [
-                reconstruction_residual(train_dirty[m], V_init[m], U_init)
+        for huber_k in HUBER_K_VALUES:
+            weights = [
+                huber_weights(residuals[m], median_r, mad, k=huber_k)
                 for m in range(3)
             ]
-            all_residuals = np.concatenate(residuals)
-            median_r = np.median(all_residuals)
-            mad = federated_mad(residuals)
 
-            for huber_k in HUBER_K_VALUES:
+            # Detection metrics (train side — that is where weights act)
+            tp, fp, fn = 0, 0, 0
+            for m in range(3):
+                flagged = set(np.where(weights[m] < 1.0)[0])
+                tp += len(flagged & contam_indices[m])
+                fp += len(flagged - contam_indices[m])
+                fn += len(contam_indices[m] - flagged)
+            prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            rep_results[('rftl_s_prec', mode, pi_s, huber_k)] = prec
+            rep_results[('rftl_s_rec', mode, pi_s, huber_k)] = rec
+
+            # Weighted re-fit for all ranks
+            V_rftl, U_rftl = fit_all_ranks_weighted(train_dirty, weights)
+            rep_results[('rftl_s', mode, pi_s, huber_k)] = best_rank_stats(
+                train_dirty, test_dirty, V_rftl, U_rftl, y_train, y_test
+            )
+
+        # ─── RFTL-S-IRLS ablation: iterated reweighting (monitoring's
+        # final estimator) instead of the one-step weights above ───
+        for huber_k in HUBER_K_VALUES:
+            weights = [np.ones(d.shape[0]) for d in train_dirty]
+            for _ in range(IRLS_ROUNDS):
+                model = MPCA_FD_Weighted(I_COMMON, WEIGHT_RANK,
+                                         iterations=IRLS_INNER_ITERATIONS,
+                                         weight_U=False)
+                _, U_it, V_it = model.train(
+                    [copy.deepcopy(d) for d in train_dirty],
+                    [w.copy() for w in weights])
+                res_it = [
+                    reconstruction_residual(train_dirty[m], V_it[m], U_it)
+                    for m in range(3)
+                ]
+                med_it = np.median(np.concatenate(res_it))
+                mad_it = federated_mad(res_it)
                 weights = [
-                    huber_weights(residuals[m], median_r, mad, k=huber_k)
+                    huber_weights(res_it[m], med_it, mad_it, k=huber_k)
                     for m in range(3)
                 ]
 
-                # Detection metrics
-                tp, fp, fn = 0, 0, 0
-                for m in range(3):
-                    flagged = set(np.where(weights[m] < 1.0)[0])
-                    tp += len(flagged & contam_indices[m])
-                    fp += len(flagged - contam_indices[m])
-                    fn += len(contam_indices[m] - flagged)
-                prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-                rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-                rep_results[('rftl_s_prec', noise_mult, pi_s, huber_k)] = prec
-                rep_results[('rftl_s_rec', noise_mult, pi_s, huber_k)] = rec
+            tp, fp, fn = 0, 0, 0
+            for m in range(3):
+                flagged = set(np.where(weights[m] < 1.0)[0])
+                tp += len(flagged & contam_indices[m])
+                fp += len(flagged - contam_indices[m])
+                fn += len(contam_indices[m] - flagged)
+            prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            rep_results[('rftl_s_irls_prec', mode, pi_s, huber_k)] = prec
+            rep_results[('rftl_s_irls_rec', mode, pi_s, huber_k)] = rec
 
-                # Weighted re-fit for all ranks
-                V_rftl, U_rftl = fit_all_ranks_weighted(train_dirty, weights)
-
-                rftl_mape = best_rank_mape(
-                    train_dirty, test_users, V_rftl, U_rftl, y_train, y_test
-                )
-                rep_results[('rftl_s', noise_mult, pi_s, huber_k)] = rftl_mape
+            V_ri, U_ri = fit_all_ranks_weighted(train_dirty, weights)
+            rep_results[('rftl_s_irls', mode, pi_s, huber_k)] = best_rank_stats(
+                train_dirty, test_dirty, V_ri, U_ri, y_train, y_test
+            )
 
     _save_repeat_result(rep_idx, rep_seed, rep_results, _GLOBAL_OUTPUT_DIR)
     print(f"  Repeat {rep_idx + 1} done (seed={rep_seed}).", flush=True)
@@ -422,13 +500,18 @@ def run_experiment(data_path, n_repeats=50, n_workers=4, seed=2024,
     print(f"Running {len(worker_args)} repeats across {n_workers} workers...",
           flush=True)
     print(f"  Sizes: {SIZES}, Ranks: {len(RANK_CONFIGS)} configs", flush=True)
-    print(f"  Noise: {NOISE_MULTIPLIERS}x, pi_S: {PI_S_LEVELS}", flush=True)
+    print(f"  Modes: {CONTAM_MODES}, pi_S (user {TARGET_USER}, train+test): "
+          f"{PI_S_LEVELS}", flush=True)
+    print(f"  Artifact: amp={AMPLITUDE}, block={BLOCK_SIZE}, "
+          f"stripes={N_STRIPES}", flush=True)
     print(f"  Huber k={HUBER_K_VALUES}, weight_U=False, iterations={FIT_ITERATIONS}",
           flush=True)
 
     start = time.time()
     if n_workers > 1:
-        pool = multiprocessing.Pool(processes=n_workers)
+        pool = multiprocessing.Pool(
+            processes=n_workers, initializer=_init_worker,
+            initargs=(_GLOBAL_DATA, _GLOBAL_Y, _GLOBAL_OUTPUT_DIR))
         all_rep = pool.map(_run_single_repeat, worker_args)
         pool.close()
         pool.join()
@@ -451,71 +534,84 @@ def run_experiment(data_path, n_repeats=50, n_workers=4, seed=2024,
 
 # ─── Reporting ───────────────────────────────────────────────────────────────
 
+def _agg(vals, field='mape'):
+    """Mean and std of one stats field over repeats (ignoring failed fits)."""
+    xs = [v[field] for v in vals if v is not None]
+    if not xs:
+        return None, None
+    return float(np.mean(xs)), float(np.std(xs))
+
+
 def report_results(results, output_dir=None):
     print("\n" + "=" * 105, flush=True)
-    print("RFTL-S PREDICTION RESULTS — REAL DATA (MAPE on log-TTF)", flush=True)
+    print("RFTL-S PREDICTION RESULTS — REAL DATA, TEST-SIDE CONTAMINATION "
+          "(errors on log-TTF)", flush=True)
     print("=" * 105, flush=True)
 
-    clean_vals = results.get(('clean', 0, 0.0), [])
+    clean_vals = results.get(('clean', 'none', 0.0), [])
     if clean_vals:
-        clean_mean = np.mean([v for v in clean_vals if v is not None])
-        clean_std = np.std([v for v in clean_vals if v is not None])
-        print(f"\nClean reference: MAPE = {clean_mean:.4f} +/- {clean_std:.4f}",
-              flush=True)
+        c_mean, c_std = _agg(clean_vals)
+        c_med, _ = _agg(clean_vals, 'median')
+        c_u0, _ = _agg(clean_vals, 'mape_user0')
+        print(f"\nClean reference: MAPE = {c_mean:.4f} +/- {c_std:.4f}  "
+              f"median {c_med:.4f}  user0-MAPE {c_u0:.4f}", flush=True)
 
-    for noise_mult in NOISE_MULTIPLIERS:
-        print(f"\n--- Noise: {noise_mult}x std ---", flush=True)
-        for huber_k in HUBER_K_VALUES:
-            print(f"\n  Huber k={huber_k}:", flush=True)
-            header = f"    {'pi_S':>5} | {'Baseline':>16} | {'RFTL-S':>16} | {'Improv':>7} | {'Prec':>5} {'Rec':>5}"
-            print(header, flush=True)
-            print("    " + "-" * (len(header) - 4), flush=True)
-
-            for pi_s in PI_S_LEVELS:
-                if pi_s == 0.0:
-                    continue
-
-                b_key = ('baseline', noise_mult, pi_s)
-                r_key = ('rftl_s', noise_mult, pi_s, huber_k)
-                p_key = ('rftl_s_prec', noise_mult, pi_s, huber_k)
-                rc_key = ('rftl_s_rec', noise_mult, pi_s, huber_k)
-
-                b_vals = [v for v in results.get(b_key, []) if v is not None]
-                r_vals = [v for v in results.get(r_key, []) if v is not None]
-                p_vals = results.get(p_key, [])
-                rc_vals = results.get(rc_key, [])
-
-                if b_vals and r_vals:
-                    b_mean = np.mean(b_vals)
-                    b_std = np.std(b_vals)
-                    r_mean = np.mean(r_vals)
-                    r_std = np.std(r_vals)
-                    improv = (b_mean - r_mean) / b_mean * 100 if b_mean > 0 else 0
-                    prec = np.mean(p_vals) if p_vals else 0
-                    rec = np.mean(rc_vals) if rc_vals else 0
-                    print(f"    {pi_s:>5.2f} | {b_mean:.4f}+/-{b_std:.4f}"
-                          f" | {r_mean:.4f}+/-{r_std:.4f}"
-                          f" | {improv:>+6.1f}% | {prec:.3f} {rec:.3f}",
-                          flush=True)
+    for mode in CONTAM_MODES:
+        print(f"\n--- Mode: {mode} (amp={AMPLITUDE}, user {TARGET_USER}, "
+              f"train+test) ---", flush=True)
+        for pi_s in PI_S_LEVELS:
+            o_vals = results.get(('oracle', mode, pi_s), [])
+            b_vals = results.get(('baseline', mode, pi_s), [])
+            if not (o_vals and b_vals):
+                continue
+            o_mean, o_std = _agg(o_vals)
+            o_u0, _ = _agg(o_vals, 'mape_user0')
+            b_mean, b_std = _agg(b_vals)
+            b_u0, _ = _agg(b_vals, 'mape_user0')
+            gap = (b_mean - o_mean) / o_mean * 100 if o_mean else 0
+            print(f"\n  pi_S={pi_s:.2f}", flush=True)
+            print(f"    {'oracle':>8}: MAPE {o_mean:.4f}+/-{o_std:.4f}  "
+                  f"user0 {o_u0:.4f}", flush=True)
+            print(f"    {'baseline':>8}: MAPE {b_mean:.4f}+/-{b_std:.4f}  "
+                  f"user0 {b_u0:.4f}  ({gap:+.1f}% vs oracle)", flush=True)
+            for method, tag in [('rftl_s', 'rftl'), ('rftl_s_irls', 'irls')]:
+                for huber_k in HUBER_K_VALUES:
+                    r_vals = results.get((method, mode, pi_s, huber_k), [])
+                    if not r_vals:
+                        continue
+                    r_mean, r_std = _agg(r_vals)
+                    r_u0, _ = _agg(r_vals, 'mape_user0')
+                    improv = (b_mean - r_mean) / b_mean * 100 if b_mean else 0
+                    prec = np.mean(results.get(
+                        (f'{method}_prec', mode, pi_s, huber_k), [0]))
+                    rec = np.mean(results.get(
+                        (f'{method}_rec', mode, pi_s, huber_k), [0]))
+                    print(f"    {tag} k={huber_k:<5}: "
+                          f"MAPE {r_mean:.4f}+/-{r_std:.4f}  "
+                          f"user0 {r_u0:.4f}  ({improv:+.1f}% vs baseline)  "
+                          f"prec {prec:.3f} rec {rec:.3f}", flush=True)
 
     print("\n" + "=" * 105, flush=True)
 
-    # Save to CSV
+    # Save to CSV — stats dicts expand to columns; prec/rec use 'value'
     if output_dir:
         rows = []
         for key, vals in results.items():
             if len(key) == 3:
-                method, noise, pi_s = key
+                method, mode, pi_s = key
                 huber_k = None
             else:
-                method, noise, pi_s, huber_k = key
+                method, mode, pi_s, huber_k = key
             for rep_idx, val in enumerate(vals):
-                if val is not None:
-                    rows.append({
-                        'method': method, 'noise_mult': noise,
-                        'pi_s': pi_s, 'huber_k': huber_k,
-                        'repeat': rep_idx, 'value': val
-                    })
+                if val is None:
+                    continue
+                row = {'method': method, 'mode': mode,
+                       'pi_s': pi_s, 'huber_k': huber_k, 'repeat': rep_idx}
+                if isinstance(val, dict):
+                    row.update(val)
+                else:
+                    row['value'] = val
+                rows.append(row)
         df = pd.DataFrame(rows)
         csv_path = os.path.join(output_dir, 'rftl_s_real_results.csv')
         df.to_csv(csv_path, index=False)
