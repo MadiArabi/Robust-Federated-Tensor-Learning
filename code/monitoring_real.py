@@ -192,6 +192,7 @@ def _run_single_repeat(args):
                                  degraded_ttf, V_clean, U_clean)})
 
     for cond_idx, (mode, amplitude, pi_s, blk) in enumerate(CONDITIONS):
+      try:
         contam_rng = np.random.RandomState(
             rep_seed + 1000 * (cond_idx + 1) + int(pi_s * 100))
         train_dirty, contam_indices = contaminate(
@@ -239,6 +240,19 @@ def _run_single_repeat(args):
                      **chart_metrics(train_dirty, holdout_users,
                                      degraded_users, degraded_ttf,
                                      V_rftl, U_rftl, weights=weights)})
+      except Exception as e:
+          # A single pathological (repeat, condition) combination -- e.g.
+          # an incremental-SVD non-convergence from an unusually degenerate
+          # sample draw -- must not lose the other 6 conditions' results
+          # for this repeat, let alone kill the whole 50-repeat pool.map()
+          # job (this is exactly what happened on HPC job 9370's monitoring
+          # run before this guard existed). Logged, not silently swallowed:
+          # visible in the job's stdout, and this condition is simply
+          # absent from the CSV for this repeat rather than corrupted.
+          print(f"  Repeat {rep_idx + 1} (seed={rep_seed}) condition "
+               f"{cond_idx} (mode={mode}, pi_s={pi_s}) FAILED: "
+               f"{type(e).__name__}: {e} -- skipping this condition",
+               flush=True)
 
     _save_repeat(rep_idx, rep_seed, rows, _GLOBAL_OUTPUT_DIR)
     print(f"  Repeat {rep_idx + 1} done (seed={rep_seed}).", flush=True)

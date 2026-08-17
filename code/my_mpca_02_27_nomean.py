@@ -51,13 +51,21 @@ class MPCA_FD():
             for sample in Y:
                 
                 W = sample - u@u.T@sample
-                M = np.block([[sigma, u.T@sample],[np.zeros((sample.shape[1],sigma.shape[1])), np.diag(np.linalg.norm(W,axis=0)**2)]]) 
+                M = np.block([[sigma, u.T@sample],[np.zeros((sample.shape[1],sigma.shape[1])), np.diag(np.linalg.norm(W,axis=0)**2)]])
                 u_prime, sigma_prime, _ =np.linalg.svd(M,full_matrices=True)
-                norm_w = W / np.linalg.norm(W, axis=0)
+                # A sample (near-)duplicate of previously-seen data has a
+                # (near-)zero orthogonal residual W, so W/||W|| is 0/0 = NaN
+                # without this guard -- NaN then poisons u for every later
+                # SVD call, surfacing far downstream as "SVD did not
+                # converge". Clamping the norm makes near-duplicate columns
+                # contribute ~0 new basis direction (the correct behavior)
+                # instead of NaN, and is a no-op whenever ||W|| is not tiny.
+                w_norm = np.linalg.norm(W, axis=0)
+                norm_w = W / np.maximum(w_norm, 1e-10)
                 u = (np.hstack((u,norm_w))@u_prime)[:,0:I1]
                 sigma = np.zeros_like(sample, dtype=float)
                 sigma[:min(sample.shape[0], sample.shape[1]), :min(sample.shape[0], sample.shape[1])] = np.diag(sigma_prime[0:min(sample.shape[0], sample.shape[1])])
-            
+
             return u[:,0:P]
             
             
@@ -75,6 +83,8 @@ class MPCA_FD():
                 c = np.kron(c1, c3)
             else:
                 c1=v1@u1
+
+                
                 c2 =v2@u2
                 c = np.kron(c1, c2)
             unfolded_x = np.array([(unfold(x2[i], mode=MODE)@c).T for i in range(x2.shape[0])])
@@ -120,13 +130,20 @@ class MPCA_FD():
             for sample in Y:
                 #print('sample', sample.shape)
                 W = sample - u@u.T@sample
-                M = np.block([[sigma, u.T@sample],[np.zeros((sample.shape[1],sigma.shape[1])), np.diag(np.linalg.norm(W,axis=0)**2)]]) 
+                M = np.block([[sigma, u.T@sample],[np.zeros((sample.shape[1],sigma.shape[1])), np.diag(np.linalg.norm(W,axis=0)**2)]])
                 #if np.any(np.iscomplex(M)):
                  #   print("V",'complex')
                 #print(M.shape)
                 #print(M[0])
                 u_prime, sigma_prime, _ =np.linalg.svd(M,full_matrices=True)
-                norm_w = W / np.linalg.norm(W, axis=0)
+                # See the matching guard + comment in Uinitial() above: a
+                # (near-)duplicate sample gives W a (near-)zero column,
+                # and W/||W|| is 0/0 = NaN without this clamp -- this is
+                # the exact site the HPC "SVD did not converge" crash
+                # traced back to (high pi_S hot_block contamination
+                # produces many near-identical contaminated samples).
+                w_norm = np.linalg.norm(W, axis=0)
+                norm_w = W / np.maximum(w_norm, 1e-10)
                 u = (np.hstack((u,norm_w))@u_prime)[:,0:I1]
                 #print('SIGMA PRIME', sigma_prime.shape)
                 sigma = np.zeros_like(sample, dtype=float)

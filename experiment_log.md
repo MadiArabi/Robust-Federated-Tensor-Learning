@@ -402,6 +402,217 @@ Two production scripts, both checkpointed/resumable and using a fork-safe `_init
 
 - [x] ~~RFTL-S placement run~~ (≈ baseline; see above)
 - [x] ~~Build + smoke-test HPC package~~ (prediction + monitoring scripts, job files — see above)
-- [ ] Submit `run_job_prediction.sh` and `run_job_monitoring.sh` to Hazel (50 repeats each, fresh output dirs)
+- [x] ~~Submit `run_job_prediction.sh` and `run_job_monitoring.sh` to Hazel~~ (2026-07-13, both running — 50 repeats each)
 - [ ] Fix chart FAR calibration for chapter-grade figures (post-HPC, doesn't block submission)
 - [ ] Add RFTL-U and RFTL-21 to both pipelines for full method comparison (separate follow-on)
+
+---
+
+## 2026-07-13: Session 8 — Strategic reassessment while HPC jobs run: two parallel directions opened
+
+### Context for the pivot
+
+Both HPC jobs (prediction, monitoring) are submitted and running (50 repeats each). While waiting, reassessed the chapter's trajectory with Madi: every positive robustness result so far has needed real engineering to surface (Gaussian → null; train-only structured artifacts → null; only test-side contamination broke the baseline; the monitoring win only appears in a narrow regime after 6 pilot iterations, with caveats — FAR miscalibration, detection blindness at low π, AIC test-leakage). The results aren't wrong, but the narrative is fragile as the spine of a chapter. Discussed alternative/complementary directions that reuse the existing infrastructure (MPCA_FD, federated V-local/U-global split, `federated_mad`/`huber_weights`, Tucker regression, IR bearing dataset) rather than starting over.
+
+**Decision: pursue two directions in parallel**, not as a full abandonment of the current work (the HPC results still matter and will be used either way) but as reframings/extensions that make the chapter more defensible:
+
+1. **Byzantine-robust federated aggregation.** Reframe RFTL-S's federated-MAD + Huber-weighting machinery as a Byzantine-robust aggregation rule for federated tensor factorization, positioned against the Byzantine-robust FL literature (Krum, trimmed mean, coordinate-wise median, geometric median). Key move: the "small-fraction, spatially-correlated artifact evades residual-based detection" finding from the monitoring pilot arc (v1–v6) maps onto a *known open problem* in that literature — robust aggregators are provably vulnerable to small-scale/structured ("stealthy") attacks. This turns our hardest empirical finding from "our detector has a gap" into "we replicate a recognized hard regime in a new domain (tensor-valued federated prognostics)." Starting here first.
+2. **Non-IID / statistical heterogeneity.** Reuse the same federated V-local/U-global architecture to study cross-site heterogeneity (different degradation regimes per user) instead of adversarial contamination. Revives "regime mixing," which was rejected as a contamination model specifically *because* it's undetectable in-subspace — that's exactly the right property for a heterogeneity study (no attacker to detect, just legitimate cross-client distribution shift). Standard, citable FL problem (FedProx-style literature); low technical risk since the architecture already supports it.
+
+Both directions are logged now so that if the session breaks, the next one picks up knowing we are pursuing (1) and (2), not just monitoring the HPC queue.
+
+### Direction 1 foundation built (2026-08-15/16): `byzantine_agg.py` + `mpca_byzantine.py` + `pilot_byzantine_agg.py`
+
+Built the reframing's core pieces:
+
+- **`code/byzantine_agg.py`** — aggregation rules operating on a list of n per-client matrices: `aggregate_sum` (non-robust baseline), `aggregate_coordinate_median`, `aggregate_trimmed_mean(n_trim)` (raises if n≤2·n_trim; at n=3,n_trim=1 it's mathematically identical to median — verified in smoke test), `aggregate_krum(f)` (raises if n<2f+3, so **not usable at our n=3, f=1** — needs n≥5). Citations for these methods are well-known but not yet pulled/verified — flagged, not blocking.
+- **`code/mpca_byzantine.py`** — `MPCA_FD_Robust`: same local-V math as `MPCA_FD` (nothing to aggregate there — purely per-client), but makes the global-U aggregation step explicit: each client's local scatter-matrix contribution to each mode's shared subspace is computed separately, then combined via a pluggable `agg_fn` before eigendecomposition (batch eigendecomposition of the aggregated scatter, replacing the incremental-SVD algorithm `MPCA_FD` uses for the same target — see docstring for the math correspondence).
+- **`code/pilot_byzantine_agg.py`** — real-data foundation pilot (reuses `prepare_data`/`load_data`/`contaminate` from the existing pipeline). Two checks: (1) sanity — does `agg_fn=sum` recover the same subspace as existing `MPCA_FD`; (2) robustness — does `median` resist a contaminated user 0 better than `sum`, using a clean reference matched to each rule (not one shared reference — see bug note below).
+
+**Bug fixed during smoke-testing:** `rob.agg == agg_name` in the summary printer silently compared a bound `DataFrame.agg()` method to a string (always False) instead of filtering the `'agg'` column — `'agg'` collides with pandas' built-in method name. Root-caused via direct CSV inspection (data was fine, filter was broken) rather than assuming the fit itself was NaN. Fixed to `rob['agg']`.
+
+**Design bug also fixed:** the first pilot version compared both `sum`-dirty and `median`-dirty fits against a single *median*-based clean reference, conflating contamination damage with the baseline difference between aggregation rules on clean (non-IID) data. Fixed to give each rule its own matched clean reference, plus a dedicated `sum-clean vs median-clean` check to measure that baseline difference directly.
+
+### Foundation pilot result (5 repeats, `output/pilot_byzantine_agg.csv`): median aggregation is WORSE than sum here, and low n / non-IID clients is why
+
+| Check | Result |
+|---|---|
+| 1: sum-agg vs existing `MPCA_FD` (clean data) | 2.60° ± 5.81° — small, confirms the batch-eigendecomposition reformulation targets the same subspace as the incremental-SVD original |
+| 1b: sum-clean vs median-clean (**no attack at all**) | **20.73° ± 6.95°** — large. Median aggregation is already substantially biased relative to sum on clean data, purely from cross-user heterogeneity (different crop sizes, different degradation regimes) |
+| 2: sum-dirty vs sum-clean, hot_block π=0.6/1.0 | **1.89° at both π levels** — essentially flat, contamination barely moves the sum-aggregated subspace |
+| 2: median-dirty vs median-clean, hot_block π=0.6/1.0 | **38.19° → 60.61°**, worsening with π — median moves far more under the same attack |
+
+**Reading:** this is the opposite of the naive expectation, and it's explainable, not a bug. Two compounding mechanisms:
+1. Sum's near-flatness is very likely the *same absorption mechanism* documented throughout the monitoring pilot arc (v1–v6): a large, fixed, repeated (low-rank) artifact tends to get its own dedicated eigenvector slot in a summed scatter matrix rather than rotating the other top components — protective for the "top" subspace, at the cost of the artifact being invisible there (consistent with everything already found about this data/pipeline).
+2. Median's large, worsening angle is very likely the well-documented weakness of *coordinate-wise* robust statistics: combining matrices entry-by-entry ignores cross-entry correlation, and can assemble an incoherent matrix that doesn't resemble any real client's structure — worse yet at **n=3**, where the "coordinate-wise middle" is a raw selection among only 3 values per entry (not a smoothed estimate), so heterogeneous non-IID clients (not just an attacker) can swing it substantially. This also means **Krum (needs n≥5) and genuinely-averaging trimmed-mean (needs n>2·n_trim with room to spare) aren't well-posed at our current n=3** — the classic FL robustness literature assumes far more clients than we have.
+
+**This does not kill Direction 1** — it's exactly the kind of finding a foundation check should surface before betting a chapter section on it. It does mean the naive "swap in classic median/trimmed-mean baselines" plan needs a fork.
+
+### Decision needed / proposed next steps (not yet chosen — flagged for Madi)
+
+1. **Expand client count.** Split the 3 users into more synthetic sub-cohorts (n≥5, ideally more) — directly fixes the n=3 degeneracy for median/trimmed-mean/Krum, and is *also* exactly what Direction 2 (heterogeneity) needs anyway, so this is shared foundational work, not a detour. Needs checking that sub-cohorts still have enough samples per client for MPCA to fit sensibly (currently ~25–35 train samples/user).
+2. **Try a distance-based (not coordinate-wise) robust rule** — e.g. geometric median (Weiszfeld iteration on the whole matrix) or an ad hoc Krum-at-n=3 (pick the single most "central" whole client contribution, clearly caveated as lacking Krum's formal guarantee at this n). Distance-based rules preserve each client's internal coordinate correlations instead of shredding them — directly targets mechanism 2 above. Cheap to add to `byzantine_agg.py`.
+3. **Report the finding itself as a contribution** regardless of 1/2 — "naive coordinate-wise robust aggregation underperforms plain averaging under small-n, non-IID federated tensor learning, unlike the large-n/near-IID regime its literature guarantees assume" is a legitimate, citable point for the discussion section, and it directly motivates Direction 2 (the root cause is non-IID clients).
+
+### Decision: both fixes at once (Madi, 2026-08-16) — n≥8 synthetic clients, coordinate-wise vs distance-based head-to-head
+
+Chose to pursue both proposed next steps together rather than sequentially: expand client count to a minimum of 8, and add distance-based aggregation rules to compare directly against the coordinate-wise family.
+
+**`code/byzantine_agg.py` extended:**
+- `aggregate_geometric_median` — Weiszfeld iteration; treats each client's matrix as one point in R^(rows·cols) and returns a distance-weighted average, preserving cross-entry correlation (unlike coordinate-wise median's independent per-entry pick).
+- `aggregate_multi_krum` — averages the `m` (default n−f) lowest-Krum-score clients instead of keeping only one; `_krum_scores` factored out and shared with `aggregate_krum`.
+- `AGGREGATORS` dict now has 6 entries: `sum`, `median`, `trimmed_mean`, `krum`, `multi_krum`, `geometric_median`.
+
+**`code/pilot_byzantine_agg.py` rewritten (v2) for n≥8:**
+- `build_synthetic_clients()` splits each real user (A/B/C) into sub-cohorts: split plan `[('A',2),('B',3),('C',3)]` → **8 synthetic clients**, sizes 16–23 samples each (using each user's full sample pool, not just the train split, since this pilot needs no held-out test). Explicitly flagged as synthetic (same underlying sensor/site data, randomly subsampled) — not independent physical sites, but exactly the expansion Direction 2 will also need.
+- One client (`A0`) is the sole Byzantine target (`F_BYZANTINE=1`), now satisfying Krum/Multi-Krum's `n≥2f+3=5` requirement (8≥5 ✓) and giving trimmed-mean genuine slack (drops 1-of-8 per side, averages the remaining 6 — no longer degenerate to median as it was at n=3).
+- Same matched-clean-reference design as the n=3 fix: every rule gets its own clean fit; heterogeneity (attack-free rule vs sum) and robustness (rule's dirty vs that rule's own clean) are reported separately per rule, coordinate-wise and distance-based grouped for direct comparison.
+- Smoke-tested (3 iterations): 8 clients build correctly, no NaN, and the pattern already looks structurally sane — median/trimmed-mean far closer to sum than at n=3 (5.3°/1.5° heterogeneity vs the earlier 20.7°), and Krum shows a large but *constant* angle across both π levels (22–28°, unmoved by how much the target client is contaminated) — consistent with Krum discarding 7 of 8 clients outright regardless of the attack, a known low-statistical-efficiency property of Krum, not a bug.
+- Full run (5 repeats, 30 iterations, all 6 rules × 2 conditions) launched 2026-08-16.
+
+### n=8, 6-rule pilot result (2026-08-16, 5 repeats, `output/pilot_byzantine_agg.csv`): trimmed_mean and multi_krum stand out; median stays unstable; the residual metric turned out to be nearly uninformative
+
+**Headline numbers** (mean ± std across 5 repeats; robustness = hot_block, π=0.6, essentially identical at π=1.0 — see saturation note below):
+
+| Rule | Heterogeneity (attack-free) | Robustness (dirty vs own clean) |
+|---|---|---|
+| sum | 0.00° ± 0.0004° | 1.07° ± 0.49° |
+| median | 21.20° ± **19.44°** | 19.08° ± **20.27°** |
+| trimmed_mean | **1.78° ± 0.47°** | **1.64° ± 0.93°** |
+| geometric_median | 10.69° ± 4.06° | 15.34° ± 4.98° |
+| krum | 30.27° ± 8.96° | 40.45° ± 10.34° |
+| multi_krum | **4.23° ± 1.16°** | **4.48° ± 1.30°** |
+
+**1. n=8 helped magnitude but not median's core problem.** Median's mean angle dropped from 38–61° (n=3) to ~19–21° (n=8) — real improvement — but its **standard deviation is nearly as large as its mean** in both checks (19.44°, 20.27°). Comparing the two: robustness angle (19.08°) is not meaningfully bigger than the attack-free heterogeneity angle (21.20°) — median isn't so much *reacting to the attack* as it is simply **noisy/high-variance across repeats regardless of whether there's an attacker**, driven by which random sub-sampling defines the 8 synthetic clients that repeat. Coordinate-wise median remains a poor choice at this scale, independent of the earlier n=3 degeneracy.
+
+**2. trimmed_mean is the standout coordinate-wise rule at n=8** (finally genuinely differentiated from median — no longer degenerate as it was at n=3): small, *low-variance* deviation from sum both attack-free (1.78°±0.47°) and under attack (1.64°±0.93°) — it tracks sum's stability closely.
+
+**3. Distance-based family is real and differentiated, not a monolith.** multi_krum performs about as well as trimmed_mean (4.2–4.5°, low variance) — the best distance-based rule. Plain krum is the *worst* performer of all six, both attack-free (30.27°) and under attack (40.45°) — expected: krum keeps only 1 of 8 clients and discards the rest, a well-known low-statistical-efficiency criticism of vanilla Krum in the literature, now reproduced empirically in a tensor-factorization setting. geometric_median sits in between (10.69° → 15.34°) — moderate baseline bias, but unlike median it shows a real, sensible marginal reaction *specifically attributable to the attack* (its robustness angle exceeds its heterogeneity angle by ~+4.6°, a cleaner "robust rule" signature than median's noisy, attack-independent behavior).
+
+**4. Contamination saturates almost immediately** (all 6 rules show nearly identical angle at π=0.6 vs π=1.0, e.g. krum 40.45°/40.45°, sum 1.07°/1.02°) — with a fixed, repeated artifact pattern, corrupting 60% vs 100% of one client's ~22 samples barely differs, since the client's local scatter matrix is already dominated by the repeated pattern at π=0.6. Consistent with the contamination model design, not a bug.
+
+**5. Sum's near-total insensitivity (1.0–1.07°) continues to look like the same absorption mechanism from the monitoring pilot arc (v1–v6)** — a large, low-rank, repeated artifact tends to get its own eigenvector slot rather than distorting the rest of the subspace. None of the 6 rules show a dramatic order-of-magnitude blow-up specifically attributable to *this* attack (on top of their own baseline heterogeneity noise) — raising the honest question of whether this fixed-pattern contamination is simply benign for subspace estimation broadly (mirroring the now-repeated project finding), regardless of aggregation rule. A harder, adversarially-optimized attack (aligned with the top eigendirections rather than pushed into a spare one — closer to the "worst-case Byzantine" the FL literature usually assumes) would be a natural stress test before concluding any rule is "robust enough."
+
+**6. `clean_client_residual` turned out to be nearly uninformative — verified as real, not a bug.** Within one repeat/condition, residual values across all 6 wildly-different aggregation rules (sum vs krum, which discard 7/8 clients!) differ by only ~7×10⁻¹¹ relative. Likely mechanism: local V (fit per-client to explain that client's *own* data) can almost fully compensate for whatever rotation the shared global U has — a gauge-freedom effect in the bilinear (V, U) factorization, where reconstruction quality on a client's own data is far more identifiable than U's specific orientation alone. **Principal angle, not reconstruction residual, is the metric with real signal for comparing aggregation rules** — worth remembering if a downstream task (e.g. a future monitoring-style experiment for this direction) is built on top of this.
+
+### Harder "hijack" attack built + a real methodological trap found and fixed (2026-08-16)
+
+**Madi chose the harder-attack path** over pivoting straight to Direction 2. Rationale: none of the 6 rules showed damage clearly beyond their own baseline noise under the physically-motivated hot_block attack, so it's unclear whether Direction 1's comparison means anything yet — cheap to resolve given the infrastructure already built.
+
+**New code:**
+- `code/byzantine_attacks.py` — `hijack_attack(amplitude_mult, target)`: an *arbitrary* (not image-derived) malicious scatter-matrix injection. Eigendecomposes the honest clients' aggregated scatter, targets the honest data's own **weakest** eigendirection (or a random direction, as a sanity check), and injects a rank-1 malicious contribution there scaled to `amplitude_mult × honest top eigenvalue`. Classic "single large outlier hijacks unweighted averaging" attack, implemented directly in scatter-matrix space — bypasses the image-contamination pipeline that kept producing benign, absorbable artifacts.
+- `code/mpca_byzantine.py` — `MPCA_FD_Robust` extended with `adversarial_client`/`adversarial_fn`: one client's per-mode scatter contribution can now be overridden with an arbitrary malicious matrix at the aggregation point, rather than derived from (even corrupted) real data — a more accurate implementation of "Byzantine" than the faulty-camera framing.
+- `code/pilot_byzantine_hijack.py` — the stress-test pilot: same 8-client split, 6 rules, amplitude sweep {2×, 5×, 20×}.
+
+**A major investigation, resolved — not a bug, a real evaluation-design trap.** First run showed sum hijacked to ~90° (as expected) but ALSO geometric_median hijacked almost as badly (~85–90°), contradicting geometric median's textbook 1/2 breakdown point. Root-caused via direct instrumentation (captured the exact matrices passed to `agg_fn` inside live `_aggregated_U`/`_initial_U` calls): **the aggregation step itself was correctly rejecting the malicious contribution at every single call** (≤0.1° from the 7 real honest clients' own aggregate, verified by capturing and replaying the exact live inputs). The apparent "hijack" was actually mostly something else: comparing a *defended* fit (which necessarily excludes the target client's real information once the defense works) against a clean reference that *includes* that client's real data conflates two different things — attack rejection vs. the unavoidable cost of losing a real, non-IID client's unique signal. Confirmed decisively with a no-attack control: **just removing client 0's real data (zero attacker) shifts geometric_median's converged fit by 33.87° vs sum's 1.25°** — geometric_median (and krum) have real, attack-independent optimization instability in this non-convex alternating (V,U) setting, from client-count/composition sensitivity alone.
+
+**Fix:** every comparison now reports three numbers — (a) `angle_vs_loo_clean`: dirty fit vs. a clean fit trained on the 7 *other* clients only (target absent entirely) — the metric that actually isolates attack success; (b) `angle_vs_full_clean`: dirty fit vs. all-8-clients clean (total real-world cost, attack + exclusion); (c) a **no-attack baseline** — the SAME LOO comparison with zero attacker, giving each rule's own natural noise floor to judge the attack's *marginal* effect against.
+
+**Smoke-test result (baseline-corrected residual attack effect, LOO metric − no-attack baseline):** sum ~88° (catastrophic, as predicted) · multi_krum +2–3° · trimmed_mean +1.5–2.5° · median +3–4° · krum +21° · geometric_median +~53° (worst of the five robust rules once corrected — contrary to naive expectation from its theoretical guarantee, likely because its higher baseline instability compounds with the attack across 30 rounds of the coupled optimization, not because any single aggregation call fails). Full 5-repeat run launched.
+
+### Full hijack pilot result (5 repeats, `output/pilot_byzantine_hijack.csv`): multi_krum is the clear winner; geometric_median is the surprise loser
+
+Baseline-corrected residual attack effect (LOO angle at amplitude=20× minus each rule's own no-attack baseline), 'weakest'-direction target:
+
+| Rule | Baseline (no attack) | Attacked (LOO) | Residual attack effect |
+|---|---|---|---|
+| sum | 0.97° | 89.64° | **+88.66°** (catastrophic, as predicted) |
+| median | 30.44° | 27.49° | −2.94° (noise-level; but baseline itself is huge — see caveat) |
+| trimmed_mean | 1.58° | 4.89° | **+3.31°** |
+| geometric_median | 18.55° | 75.53° | **+56.98°** (worst of the 5 robust rules) |
+| krum | 19.51° | 33.61° | +14.09° |
+| **multi_krum** | 1.27° | 4.22° | **+2.94°** (best) |
+
+**multi_krum wins decisively and consistently.** Smallest residual effect, smallest baseline noise, and — critically — this held up under the **random-direction sanity check too** (4.22°±0.98° at amplitude 20×, matching the 'weakest'-direction result almost exactly): its robustness isn't an artifact of the specific attack direction tested.
+
+**median's near-zero residual is a false positive, not real robustness** — its no-attack baseline (30.44°) is already so large (high inherent variance in this small-n, non-IID setting — consistent with the Direction-1 v1/v2 finding) that this specific attack simply doesn't add much on top. Confirmed by the random-direction check: 49.00°±**33.16°** — enormous variance, unusable as a robust rule regardless of attack presence.
+
+**trimmed_mean is good against the targeted attack but fragile against a random direction**: residual shrinks to +3.31° at high amplitude under 'weakest' targeting, but explodes to 48.99°±**31.19°** under random-direction targeting at the same amplitude — direction-dependent, inconsistent robustness. A real weakness worth reporting honestly, not hiding.
+
+**geometric_median is the standout disappointment** — the largest residual effect of any robust rule (+56.98°), consistent across both 'weakest' (75.53°) and random (79.07°±4.34°, low variance — so consistently bad, not noisy-bad) attack directions. This contradicts geometric median's textbook 1/2 breakdown-point guarantee, which is a **single-shot/static** guarantee — the investigation above showed the aggregation step itself correctly rejects the malicious contribution at every individual call (≤0.1° from the true honest aggregate). The likely mechanism: geometric_median's higher inherent optimization instability in this non-convex, iteratively-coupled (V,U) setting (33.87° baseline just from excluding one client) compounds over 30 rounds with an attacker that gets to adaptively retarget every round — a multi-round vulnerability the classical single-shot Byzantine-robustness literature doesn't cover. Worth stating explicitly as a finding: **theoretical single-aggregation-step robustness guarantees do not automatically transfer to iterative, coupled non-convex factorization settings.**
+
+**krum: moderate, consistent residual** (+14.09°, same ~33.6° absolute value regardless of amplitude 2×/5×/20× or attack direction) — a real but bounded vulnerability, better than geometric_median, worse than multi_krum/trimmed_mean.
+
+### Direction 1 headline result: **multi_krum is the carried-forward robust aggregation rule.** Across both stress tests run (physically-motivated hot_block artifacts AND the literature-standard arbitrary hijack attack, at multiple amplitudes and two attack directions), multi_krum is the only rule that is simultaneously low-baseline-noise, low-residual-attack-effect, and consistent across attack directions.
+
+### Direction 1 write-up consolidated (2026-08-16)
+
+Per Madi's request, the full Direction 1 narrative (motivation, n=3 degeneracy, n=8 fix, the hot_block/hijack experiments, the LOO-metric methodological fix, final results and recommendation) has been consolidated out of this chronological log into a single, self-contained document: **`direction1_byzantine_aggregation_findings.md`**. That document is now the primary reference for Direction 1's findings; this log retains the full session-by-session detail for provenance but new sessions should start from the consolidated write-up. `chapter3_draft.md` §3.6 was also updated with pointers into it (RFTL-U reconciliation flagged as an open scope question, citation-verification task noted).
+
+### Direction 2 started (2026-08-16): does local V protect the shared subspace from non-IID heterogeneity?
+
+**Design decided with Madi:** rather than reusing the n=8 A/B/C-derived split directly (which conflates degradation-regime heterogeneity with the sensor/crop-size heterogeneity already present between the real users), built a cleaner, isolated heterogeneity study: a single crop size (`prepare_data(..., 'C')`, 20×20) applied to the **full 284-sample pool**, partitioned into n=8 synthetic clients via **Dirichlet(α) allocation over TTF-tertile degradation-regime labels** — the standard non-IID FL benchmark construction (Hsu, Qi & Brown 2019; citation to verify). Low α → each client dominated by one regime (highly non-IID); high α → balanced/near-IID. This isolates regime heterogeneity as the only variable.
+
+**Core comparison — the actual research question:** does the existing federated architecture (local `V` per client, shared `U`) protect the shared subspace from heterogeneity degradation better than a "no personalization" alternative (single shared `V` fit once across pooled data)? This is the standard personalized-FL hypothesis (local layers absorb client-specific structure, protecting a shared layer) applied to federated tensor factorization for the first time here.
+
+**New code:**
+- `code/heterogeneity.py` — `ttf_regime_labels` (TTF-tertile regime assignment), `dirichlet_partition` (with a retry-guarded `min_client_size` — a naive draw at α=0.1/n=8 produced a client with **zero samples**, which would break `Vinitial`'s eigendecomposition; fixed by resampling until every client has ≥5 samples, raising if infeasible after 50 attempts rather than silently proceeding with a degenerate client). Feasibility check: α ≥ ~0.15 reliably succeeds at n=8; swept α ∈ {0.2, 0.5, 1.0, 3.0, 10.0, 100.0}.
+- `code/mpca_byzantine.py` — `MPCA_FD_Robust.train()` extended with `shared_v` (default False): when True, `V` is fit once on pooled data across all clients and applied identically to every client — the "no personalization" ablation. Smoke-tested: per-client-V path unchanged; shared-V path gives identical `V` across clients; at n=1 (no client boundaries), `shared_v=True` and `shared_v=False` reduce to the same subspace (principal angle ~10⁻⁶°, verified after correcting for eigenvector sign/rotation ambiguity within a degenerate eigenspace — not a bug).
+- `code/pilot_heterogeneity.py` — compares `federated` (`shared_v=False`) vs `no_personalization` (`shared_v=True`) against a pooled reference (n=1, all 284 samples, no client boundaries — the "no privacy constraint" upper bound), via principal angle, across the α sweep.
+
+**Smoke test (3 iterations, α ∈ {0.2, 1.0, 100.0}):** structurally clean (no NaN, size guard respected), and already directionally promising — `federated` beat `no_personalization` (smaller angle vs. pooled reference) at **every** α level tested, by a consistent ~5–7°. The α-trend itself (does the gap widen as heterogeneity increases) needs full iteration count to resolve — too noisy at 3 iterations to read. Full run (5 repeats, 30 iterations) launched.
+
+### Full heterogeneity pilot result (5 repeats, `output/pilot_heterogeneity.csv`): the original hypothesis (gap widens with heterogeneity) did NOT hold — but a different, real finding emerged instead
+
+Mean angle vs. pooled reference, by α (0.2 = most heterogeneous, 100 = near-IID):
+
+| α | federated | no_personalization | gap |
+|---|---|---|---|
+| 0.2 | 8.81 | 11.39 | +2.58 |
+| 0.5 | 9.60 | 7.69 | −1.91 |
+| 1.0 | 9.84 | 12.12 | +2.28 |
+| 3.0 | 8.30 | 13.00 | +4.71 |
+| 10.0 | 9.75 | 9.28 | −0.46 |
+| 100.0 | 8.67 | 13.86 | +5.19 |
+
+**The gap does not widen monotonically as heterogeneity increases — if anything the largest federated wins are at the near-IID end (α=3, 100), the opposite of the original hypothesis.** Mean-only, this looked like a null/failed result.
+
+**But the variance tells a clearer and more interesting story.** `federated`'s std is tight and stable at every α (0.63°–1.65°). `no_personalization`'s std is wildly unstable (1.0°–7.5°) and **bimodal**: three separate (repeat, α) combinations — at α=0.5 (×2) and α=10.0, different repeats and different α levels, ruling out a single artifact seed — landed at angle ≈0.000002–0.000003° (essentially exact agreement with the pooled reference), while other repeats at the *same* α landed 12–16° away. **Revised finding: local V gives a consistently stable, low-variance global subspace estimate regardless of client heterogeneity level; the no-personalization ablation is not just more biased on average, it's fundamentally less predictable — sometimes coincidentally near-perfect, sometimes far off, in the same non-convex optimization.**
+
+This connects directly to a cross-cutting theme first seen in Direction 1: components that retain more per-client-specific structure during fitting (there: full per-client scatter contributions vs. Krum's single-client selection; here: local V vs. a single pooled V) tend to produce more stable, lower-variance convergence in this non-convex alternating (V,U) optimization — a generalizable point spanning both directions, not specific to either.
+
+**A second candidate explanation for the flat mean-bias trend, worth testing:** TTF-regime heterogeneity may be structurally *in-subspace* — i.e., different degradation stages of the same bearing may still share the same dominant low-rank directions of image variation, varying smoothly within that subspace rather than requiring a different one. This is the exact mechanism that got "regime mixing" rejected as a contamination model back in Session 6 ("swapped samples still lie in the shared low-rank subspace, so residuals stay small — same blindness"). If true, TTF-regime partitioning may simply be a weak stressor for this pipeline regardless of architecture — a third instance of the "absorption" theme running through this chapter's whole empirical arc (Gaussian noise, train-only structured artifacts, and now regime heterogeneity all fail to perturb the directions the fit actually uses).
+
+### HPC prediction run confirmed (2026-08-16): job 9370, 50 repeats, 5.39 hours — the oracle-collapse finding holds at full statistical power
+
+Pulled from `origin/main` (Madi ran/pushed from Hazel). `output_testside/rftl_s_real_results.csv` (4250 rows) + `output_file.j9370` (LSF log) — job completed successfully, full grid: {hot_block, stripe} × π_S {0.3, 0.6, 1.0} × Huber k {1.345, 3.0}, clean/oracle/baseline/rftl_s(one-step)/rftl_s_irls.
+
+**Clean reference: MAPE 0.0689 ± 0.0165** (median 0.0563, user0 0.0780) — matches the 5-repeat pilot closely.
+
+**1. Oracle collapse confirmed decisively, and it's worse at n=50 than the pilot suggested.** Baseline beats oracle by **43.4% to 75.9%** across all six (mode, π) cells — e.g. hot_block π=1.0: oracle MAPE 0.2626±0.1822 (user0 0.6289 — 8× clean) vs. baseline 0.0632±0.0120 (essentially at clean). This is no longer pilot-level evidence — it's the headline finding of the whole prediction-side story at proper power: an idealized robust estimator that discards contamination gets catastrophically miscalibrated when the fault persists at deployment, while doing nothing self-calibrates fine.
+
+**2. Baseline stays within ~3% of clean at every single condition** (0.0609–0.0703 vs. clean's 0.0689) — the absorption/self-calibration mechanism holds across the full grid, not just the pilot cells.
+
+**3. RFTL-S/IRLS costs essentially nothing relative to baseline** — MAPE deltas range −5.7% to +5.4% across all conditions/k values, mostly within noise given per-condition std of 0.01–0.03. Robustness doesn't meaningfully help prediction here (as established), but critically it doesn't hurt either.
+
+**4. A striking, 100%-consistent detection null: rftl_s (one-step) recall for stripe at k=3.0 is *exactly* 0.000000 — every one of 50 repeats, all three π levels.** (Verified directly against the raw CSV, not just the printed 3-decimal summary — genuinely exact zero, not a rounding artifact.) Precision is undefined/0 alongside it (nothing ever flagged). This is a clean, decisive, fully-powered confirmation of the stripe-invisibility theme already established in the monitoring pilot arc — at the conservative k=3.0 threshold, one-step residual detection never once catches a stripe artifact, regardless of contamination fraction.
+
+**5. IRLS partially rescues stripe detection at k=3.0** (recall 0.04→0.19→0.20 as π increases 0.3→0.6→1.0) — better than one-step's hard zero, but still weak. Multi-round reweighting helps some; doesn't fully fix the underlying absorption.
+
+**6. k=1.345 is the practically better choice for this task, contradicting the "prefer the conservative k=3.0" assumption carried over from the monitoring work.** Detection is dramatically better at k=1.345 for both artifact types (hot_block recall 0.94–1.00 vs. 0.06–0.17 at k=3.0; stripe recall 0.55–0.71 vs. ≈0 at k=3.0) with no meaningful MAPE cost either way. For prediction specifically — unlike monitoring, where a looser k traded detection for higher false-alarm rate on the control chart — there's no equivalent penalty visible here, so the looser threshold is close to a free win on detection quality.
+
+**Relevance to the "is this worth a chapter" question:** this closes the main gap flagged earlier — finding #2 (naive robustness backfires under persistent deployment contamination) is now confirmed at n=50 across the full grid, not just a 5-repeat pilot. The monitoring HPC job (`run_job_monitoring.sh`) is still outstanding and would close the same gap for finding #3.
+
+### HPC monitoring job crashed (2026-08-16): SVD non-convergence, root-caused and fixed
+
+Madi reported a crash mid-run on Hazel: `numpy.linalg.LinAlgError: SVD did not converge`, raised inside `my_mpca_02_27_nomean.py::U()` (called from `monitoring_real.py::fit_mpca` — the **baseline** arm), which killed the entire `pool.map()` call and the whole job with it (one worker's exception propagates and terminates the pool).
+
+**Root cause.** `U()` and `Uinitial()` (Chapter 2's original incremental-SVD implementation) both compute a new sample's orthogonal residual `W = sample - u@u.T@sample`, then normalize: `norm_w = W / np.linalg.norm(W, axis=0)`. If a sample's data already lies entirely within the subspace `u` has already seen (i.e. it's a near-duplicate of previously-processed data), the column norm of `W` is ≈0, and the division is 0/0 = NaN. That NaN gets folded into `u` via `np.hstack((u, norm_w)) @ u_prime`, poisoning every subsequent incremental-SVD call — which is exactly what surfaces downstream as "SVD did not converge" (LAPACK can't handle a NaN-contaminated matrix). The monitoring production grid is precisely where this triggers: `hot_block` at π=0.8/1.0 replaces most-or-all of a user's training samples with the *identical* fixed artifact (same block, same value, same location, every time) — once the incremental fit has absorbed that pattern from one contaminated sample, every subsequent duplicate contributes ≈0 new orthogonal information. Those high-π conditions were new to the production script's wider grid and were never exercised by the earlier local pilots (which only tested π ∈ {0.3, 0.6}) — a real gap in pre-submission testing.
+
+**Confirms a prior, undocumented fix elsewhere in the codebase.** `rftl_s.py::MPCA_FD_Weighted` (the RFTL-S/IRLS estimator) already guards against exactly this (`norm_W[norm_W < 1e-10] = 1e-10`, from an earlier session) — the guard was never backported to the plain `MPCA_FD` baseline path in `my_mpca_02_27_nomean.py` that `monitoring_real.py`'s baseline arm still uses. This is why the RFTL-S/IRLS arms never crashed and only the baseline arm did.
+
+**Fix applied (`code/my_mpca_02_27_nomean.py`, both `Uinitial()` and `U()`):** `norm_w = W / np.maximum(np.linalg.norm(W, axis=0), 1e-10)` — mathematically a strict no-op whenever the column norm exceeds 1e-10 (i.e. every previously-tested, well-conditioned case), and makes a near-duplicate sample contribute ~0 new basis direction (the correct behavior) instead of NaN. Verified: (a) an ordinary clean-data fit gives identical, NaN-free output after the fix; (b) searched the rest of the codebase for the same unguarded-division pattern — only `byzantine_attacks.py`'s random-direction draw has a bare `/np.linalg.norm`, but that's a random Gaussian vector with measure-zero collision probability, not a real risk.
+
+**Also added defense-in-depth in `code/monitoring_real.py`:** wrapped each (repeat, condition) computation in its own try/except — a single pathological combination is now logged and skipped rather than crashing the entire 50-repeat job. Verified with a forced-failure test: one condition fails and is cleanly absent from that repeat's rows; the other 6 conditions and the checkpoint still complete normally. This is insurance against a *future* edge case beyond the one just fixed, not a substitute for the root-cause fix.
+
+**Not yet confirmed:** a local reproduction sweep across all 50 production seeds × 7 conditions was still running (no crash found in the first repeat checked) when this was written — the root-cause diagnosis doesn't depend on reproducing it locally (LAPACK behavior can differ between the HPC's Linux BLAS and the local Windows conda env even for the same logical near-degeneracy), but worth checking the sweep's outcome for completeness.
+
+### What's next
+
+- [ ] Commit and push the `my_mpca_02_27_nomean.py` fix + `monitoring_real.py` defensive handling; Madi to pull on Hazel and resubmit `run_job_monitoring.sh` (checkpointing means a fresh submission with the same `--output-dir` should resume from whatever repeats completed before the crash, not restart from scratch — verify this before resubmitting)
+- [ ] Check the local crash-reproduction sweep's outcome once it finishes
+- [ ] Check status of / pull the monitoring HPC job once resubmitted and complete — same confirmation-at-scale still needed for the positive (monitoring) result
+- [ ] Decide with Madi: (a) accept the stability finding as Direction 2's headline result and move to connecting it to a downstream task (does federated's stability translate to better/more reliable TTF prediction or monitoring under heterogeneity?), or (b) try a heterogeneity source more likely to be out-of-subspace (e.g. combining regime with the real A/B/C crop-size/sensor heterogeneity that was deliberately excluded from this clean design) as a harder stress test — directly parallel to Direction 1's pivot from a benign in-subspace attack to the arbitrary hijack attack
+- [ ] Reconcile RFTL-U (§3.2.2 of `chapter3_draft.md`, Grassmann-distance user trimming) with the empirical benchmark — does it supersede, extend as a 7th candidate rule, or sit alongside Multi-Krum? (Madi's call — see `direction1_byzantine_aggregation_findings.md` §1 and §6)
+- [ ] Adopt multi_krum as the RFTL-S-adjacent aggregation rule for any further Direction 1 experiments (e.g. folding into a production-style comparison, or directly into the monitoring/prediction pipelines as a fourth method arm)
+- [ ] Pull and verify actual citations for Krum / coordinate-median / trimmed-mean / geometric-median / small-magnitude-attack literature before chapter use, plus the Dirichlet-partition non-IID citation for Direction 2
