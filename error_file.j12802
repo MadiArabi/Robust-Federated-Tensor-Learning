@@ -1,0 +1,39 @@
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/usr/local/usrapps/iselingzhang/sarabi/tensorimage/lib/python3.12/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+                    ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/usrapps/iselingzhang/sarabi/tensorimage/lib/python3.12/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+           ^^^^^^^^^^^^^^^^
+  File "/rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/code/monitoring_real.py", line 201, in _run_single_repeat
+    V_base, U_base = fit_mpca(train_dirty, FIT_ITERATIONS)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/code/monitoring_real.py", line 94, in fit_mpca
+    mpca.train(*[copy.deepcopy(u) for u in train_users])
+  File "/rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/code/my_mpca_02_27_nomean.py", line 165, in train
+    U_mat[i] = U(projected,U_mat,i,self.P[i])
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/code/my_mpca_02_27_nomean.py", line 128, in U
+    u_prime, sigma_prime, _ =np.linalg.svd(M,full_matrices=True)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/usrapps/iselingzhang/sarabi/tensorimage/lib/python3.12/site-packages/numpy/linalg/_linalg.py", line 1812, in svd
+    u, s, vh = gufunc(a, signature=signature)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/usrapps/iselingzhang/sarabi/tensorimage/lib/python3.12/site-packages/numpy/linalg/_linalg.py", line 113, in _raise_linalgerror_svd_nonconvergence
+    raise LinAlgError("SVD did not converge")
+numpy.linalg.LinAlgError: SVD did not converge
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/code/monitoring_real.py", line 297, in <module>
+    pool.map(_run_single_repeat, worker_args)
+  File "/usr/local/usrapps/iselingzhang/sarabi/tensorimage/lib/python3.12/multiprocessing/pool.py", line 367, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/usrapps/iselingzhang/sarabi/tensorimage/lib/python3.12/multiprocessing/pool.py", line 774, in get
+    raise self._value
+numpy.linalg.LinAlgError: SVD did not converge
