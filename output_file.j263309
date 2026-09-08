@@ -1,0 +1,183 @@
+Loading real degradation data...
+  Loaded 284 samples
+  Resuming: 49 repeats already saved, 1 remaining.
+Running 1 repeats x 15 converged fits (+IRLS inner fits), 10 workers...
+  Repeat 7 done (seed=68031).
+
+Done in 0.04 hours.
+Saved 750 rows to /rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/output_monitoring/monitoring_real_results.csv
+
+================================================================================================
+MONITORING RESULTS (SPE chart): clean / baseline / RFTL-S (IRLS)
+================================================================================================
+
+Clean chart:
+         far: u0 0.523  u1 0.520  u2 0.466
+       power: u0 0.923  u1 0.928  u2 0.907
+         auc: u0 0.855  u1 0.870  u2 0.881
+     det_ttf: u0 31.240  u1 32.740  u2 32.200
+       limit: u0 58.737  u1 89.785  u2 125.476
+
+hot_block amp=10.0 pi_s=0.3 block=9:
+         far:  base  u0 0.213  u1 0.520  u2 0.464
+               rftl  u0 0.238  u1 0.508  u2 0.459
+       power:  base  u0 0.694  u1 0.917  u2 0.897
+               rftl  u0 0.720  u1 0.924  u2 0.903
+         auc:  base  u0 0.848  u1 0.867  u2 0.878
+               rftl  u0 0.848  u1 0.873  u2 0.882
+     det_ttf:  base  u0 30.204  u1 32.400  u2 31.920
+               rftl  u0 30.260  u1 32.740  u2 32.200
+       limit:  base  u0 105.880  u1 93.727  u2 130.308
+               rftl  u0 68.696  u1 90.157  u2 125.783
+    detection: precision 0.120  recall 0.130
+    user0 power: clean 0.923 -> base 0.694 -> rftl 0.720
+
+hot_block amp=10.0 pi_s=0.4 block=9:
+         far:  base  u0 0.284  u1 0.495  u2 0.444
+               rftl  u0 0.306  u1 0.495  u2 0.457
+       power:  base  u0 0.732  u1 0.904  u2 0.884
+               rftl  u0 0.744  u1 0.903  u2 0.887
+         auc:  base  u0 0.841  u1 0.868  u2 0.873
+               rftl  u0 0.836  u1 0.867  u2 0.874
+     det_ttf:  base  u0 30.771  u1 32.400  u2 31.880
+               rftl  u0 30.854  u1 32.340  u2 31.880
+       limit:  base  u0 163.354  u1 97.573  u2 134.533
+               rftl  u0 108.501  u1 96.604  u2 132.395
+    detection: precision 0.133  recall 0.108
+    user0 power: clean 0.923 -> base 0.732 -> rftl 0.744
+
+hot_block amp=10.0 pi_s=0.5 block=9:
+         far:  base  u0 0.383  u1 0.475  u2 0.427
+               rftl  u0 0.404  u1 0.502  u2 0.455
+       power:  base  u0 0.783  u1 0.885  u2 0.871
+               rftl  u0 0.840  u1 0.911  u2 0.898
+         auc:  base  u0 0.842  u1 0.876  u2 0.880
+               rftl  u0 0.842  u1 0.868  u2 0.880
+     det_ttf:  base  u0 31.196  u1 32.520  u2 31.920
+               rftl  u0 31.143  u1 32.560  u2 32.100
+       limit:  base  u0 123.068  u1 94.778  u2 132.010
+               rftl  u0 115.695  u1 94.561  u2 130.220
+    detection: precision 0.180  recall 0.164
+    user0 power: clean 0.923 -> base 0.783 -> rftl 0.840
+
+hot_block amp=10.0 pi_s=0.6 block=9:
+         far:  base  u0 0.581  u1 0.497  u2 0.442
+               rftl  u0 0.593  u1 0.462  u2 0.449
+       power:  base  u0 0.880  u1 0.894  u2 0.874
+               rftl  u0 0.883  u1 0.891  u2 0.885
+         auc:  base  u0 0.843  u1 0.862  u2 0.871
+               rftl  u0 0.848  u1 0.866  u2 0.880
+     det_ttf:  base  u0 31.391  u1 32.340  u2 31.580
+               rftl  u0 31.522  u1 32.380  u2 31.920
+       limit:  base  u0 169.561  u1 97.309  u2 136.111
+               rftl  u0 137.192  u1 95.962  u2 131.610
+    detection: precision 0.156  recall 0.160
+    user0 power: clean 0.923 -> base 0.880 -> rftl 0.883
+
+hot_block amp=10.0 pi_s=0.8 block=9:
+         far:  base  u0 0.777  u1 0.441  u2 0.399
+               rftl  u0 0.783  u1 0.445  u2 0.404
+       power:  base  u0 0.805  u1 0.836  u2 0.819
+               rftl  u0 0.836  u1 0.853  u2 0.849
+         auc:  base  u0 0.849  u1 0.853  u2 0.864
+               rftl  u0 0.838  u1 0.859  u2 0.863
+     det_ttf:  base  u0 31.537  u1 30.940  u2 31.102
+               rftl  u0 31.452  u1 31.980  u2 31.440
+       limit:  base  u0 349.896  u1 115.151  u2 156.593
+               rftl  u0 227.326  u1 103.707  u2 141.063
+    detection: precision 0.360  recall 0.336
+    user0 power: clean 0.923 -> base 0.805 -> rftl 0.836
+
+hot_block amp=10.0 pi_s=1.0 block=9:
+         far:  base  u0 0.860  u1 0.446  u2 0.395
+               rftl  u0 0.780  u1 0.394  u2 0.387
+       power:  base  u0 0.864  u1 0.853  u2 0.832
+               rftl  u0 0.780  u1 0.793  u2 0.768
+         auc:  base  u0 0.834  u1 0.865  u2 0.867
+               rftl  u0 0.823  u1 0.855  u2 0.850
+     det_ttf:  base  u0 31.477  u1 31.620  u2 30.980
+               rftl  u0 31.744  u1 30.300  u2 29.600
+       limit:  base  u0 144.333  u1 110.049  u2 152.064
+               rftl  u0 254.190  u1 127.173  u2 172.319
+    detection: precision 0.420  recall 0.420
+    user0 power: clean 0.923 -> base 0.864 -> rftl 0.780
+
+stripe amp=10.0 pi_s=0.6 block=9:
+         far:  base  u0 0.479  u1 0.522  u2 0.468
+               rftl  u0 0.470  u1 0.522  u2 0.468
+       power:  base  u0 0.889  u1 0.929  u2 0.909
+               rftl  u0 0.882  u1 0.929  u2 0.909
+         auc:  base  u0 0.843  u1 0.870  u2 0.881
+               rftl  u0 0.841  u1 0.870  u2 0.881
+     det_ttf:  base  u0 31.260  u1 32.740  u2 32.200
+               rftl  u0 31.260  u1 32.740  u2 32.200
+       limit:  base  u0 60.588  u1 89.482  u2 125.156
+               rftl  u0 60.898  u1 89.444  u2 125.081
+    detection: precision 0.120  recall 0.120
+    user0 power: clean 0.923 -> base 0.889 -> rftl 0.882
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@c010n03>
+Subject: Job 263309: <rftl_monitoring> in cluster <Hazel> Done
+
+Job <rftl_monitoring> was submitted from host <login01.hpc.ncsu.edu> by user <sarabi> in cluster <Hazel> at Mon Sep  7 20:15:16 2026
+Job was executed on host(s) <1*c010n03>, in queue <long>, as user <sarabi> in cluster <Hazel> at Mon Sep  7 20:15:36 2026
+                            <1*c004n04>
+                            <1*c008n02>
+                            <1*c006n01>
+                            <1*c011n02>
+                            <1*c003n02>
+                            <2*c003n01>
+                            <2*c012n01>
+</tmp/.lsbtmp290932> was used as the home directory.
+</rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning> was used as the working directory.
+Started at Mon Sep  7 20:15:36 2026
+Terminated at Mon Sep  7 20:18:27 2026
+Results reported at Mon Sep  7 20:18:27 2026
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+# LSBATCH: User input
+#!/bin/bash
+#BSUB -n 10
+#BSUB -W 8640
+#BSUB -R "rusage[mem=8]"
+#BSUB -o output_file.j%J
+#BSUB -e error_file.j%J
+#BSUB -J rftl_monitoring
+
+
+source ~/.bashrc
+conda activate  /usr/local/usrapps/iselingzhang/sarabi/tensorimage
+
+# SPE-chart monitoring experiment: clean/baseline/RFTL-S(IRLS) under
+# structured train-side contamination of user 0 (masking/swamping).
+python code/monitoring_real.py --data-path /rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/data/ --n-repeats 50 --n-workers 10 --output-dir /rs1/researchers/x/xfang8/chapter3/Robust-Federated-Tensor-Learning/output_monitoring/
+
+------------------------------------------------------------
+
+Successfully completed.
+
+Resource usage summary:
+
+    CPU time :                                   162.19 sec.
+    Max Memory :                                 -
+    Average Memory :                             -
+    Total Requested Memory :                     64.00 GB
+    Delta Memory :                               -
+    Max Swap :                                   -
+    Max Processes :                              14
+    Max Threads :                                19
+    Run time :                                   173 sec.
+    Turnaround time :                            191 sec.
+
+The output (if any) is above this job summary.
+
+
+
+PS:
+
+Read file <error_file.j263309> for stderr output of this job.
+
