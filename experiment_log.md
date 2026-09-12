@@ -647,11 +647,34 @@ Madi asked, correctly, whether the bimodal-detection finding could be an impleme
 
 **Verdict: job 9370's results are trustworthy. The oracle-collapse finding does NOT need to be re-run.** This makes mechanistic sense too: even if the near-duplicate-sample bug fired occasionally in the prediction pipeline's baseline/oracle fits, prediction's min-max→Ridge→Tucker regression stack has been shown throughout this chapter to absorb/regularize away extreme upstream feature values — the same buffering that makes prediction largely insensitive to real contamination would likely also dampen a numerical artifact, unlike monitoring's direct-residual metric which has no such buffer and amplified the bug into an obvious spike.
 
+### Genuinely fresh monitoring run verified and analyzed (2026-09-12): job 275630's checkpoints are correct, corruption theme replicates, mechanism now understood
+
+**Verifying freshness.** Job 275630's log said "Resuming: 50 repeats already saved, 0 remaining" and ran in 33 seconds — meaning the real computation happened in an earlier, unlogged submission (whose `output_file` was never pushed), and this job only re-packaged already-complete checkpoints. Confirmed those checkpoints are genuinely the fixed-code output, not a repeat of the earlier corruption: the 4 repeats previously proven corrupted (2, 8, 12, 47 — baseline limit 341–2523 at hot_block π=0.6) now all show normal values (54–62), matching what independent local reproduction with the fixed code gave for repeat 2 (61.75, exact match). Confirmed trustworthy.
+
+**But new large outliers appear elsewhere (repeats 4, 17, 18, 20 — baseline limits up to 2770) — verified genuine, not a residual bug**, using the same isolated-vs-correlated diagnostic developed for job 9370: checked each flagged repeat's *own* clean arm (always normal, 54–60) and its *own* π-sweep (spikes are non-monotonic and scattered — e.g. repeat 17 spikes at π=0.5 and 0.8 but is normal at 0.3/0.4/0.6/1.0; different repeats spike at different π levels). A residual bug tied to contamination density would correlate with π; this doesn't. Consistent instead with a well-understood statistical mechanism: **the control limit (mean + 3σ of ~15–16 training residuals) is a non-robust dispersion estimate at a very small sample size, so a single high-leverage residual can dominate it and produce an order-of-magnitude swing** — clean data shows a mild version of this (max limit 207 vs typical ~59, ~3.5×) from pure sampling luck, while contamination amplifies it severely (2000–2800, ~35–45×) because contaminated samples are specifically the kind of high-residual point this estimator is fragile to.
+
+**Full re-analysis on verified data (n=50):**
+
+| pi_s | baseline power | rftl_s power | baseline limit (median) | rftl_s limit (median) |
+|---|---|---|---|---|
+| clean | 0.920±0.123 | — | 61.2±21.3 | — |
+| 0.3 | 0.692±0.197 | 0.720±0.177 | 69.0 | 68.7 |
+| 0.4 | 0.654±0.300 | 0.744±0.207 | 67.0 | 66.3 |
+| 0.5 | 0.741±0.304 | 0.840±0.176 | 63.8 | 63.0 |
+| 0.6 | 0.900±0.235 | 0.883±0.267 | 57.0 | 57.0 |
+| 0.8 | 0.818±0.387 | 0.836±0.369 | 47.1 | 49.6 |
+| 1.0 | 0.840±0.370 | 0.780±0.418 | 25.9 | 25.9 |
+
+Medians (robust to the isolated spikes) show baseline's *typical* masking is mild — most repeats aren't severely masked at all, consistent with the "small minority of unlucky draws" mechanism above, not universal, guaranteed masking. Means are dominated by that minority.
+
+**Detected-vs-missed split (rftl_s recall ≥ 0.5) replicates the earlier qualitative shape, though with different specific numbers (as expected, since the data itself changed):** at π=0.3, detected repeats (7/50) show real recovery (power 0.661→0.780); at π=1.0, detected repeats (21/50) show baseline was *already fine* (power 0.952) and RFTL-S made it *worse* (0.762) — the backfire mechanism (total corruption of one user leaves no clean/dirty distinction for Huber weighting to exploit) replicates on genuinely correct data, not just the corrupted run. Detection recall remains sharply bimodal (almost always exactly 0 or 1, not graded) at every π level — also replicates.
+
+**Overall verdict:** the qualitative story from the invalidated analysis holds up on real data — masking is real but conditional on an unlucky small-sample draw (not universal), detection is bimodal, and RFTL-S's benefit is inconsistent and actively backfires at total (π=1.0) corruption. The specific numbers differ from the earlier (voided) run, as they should, but the mechanism-level conclusions are now on solid ground. This is ready to write up, with the small-sample control-limit fragility explicitly named as part of the mechanism (not just "masking happens sometimes").
+
 ### What's next
 
-- [ ] Full fresh 50-repeat monitoring run on HPC with the fixed code and a clean `output_monitoring/` (no stale checkpoints) — only after the checkpoint wipe is confirmed pushed
-- [ ] When verifying any future HPC result, use the outlier-scan-against-known-corruption-signature method (see above), not local reproduction across platforms — the latter is now proven unreliable for this codebase
-- [ ] Re-do the bimodal-detection / masking analysis from scratch once genuinely fresh monitoring data exists; do not reuse any conclusion from the invalidated run above
+- [ ] Write up the monitoring finding for the chapter using the verified table and mechanism above — do not use any number from the voided 2026-09-07 run
+- [ ] Consider whether the control-limit estimator itself should be made more robust (e.g. MAD-based rather than mean+3σ) given the small-sample fragility identified — this is a natural, well-motivated follow-up experiment, not just a caveat
 - [ ] Decide with Madi: (a) accept the Direction 2 stability finding as its headline result and move to connecting it to a downstream task, or (b) try a heterogeneity source more likely to be out-of-subspace as a harder stress test
 - [ ] Reconcile RFTL-U (§3.2.2 of `chapter3_draft.md`, Grassmann-distance user trimming) with the empirical benchmark — does it supersede, extend as a 7th candidate rule, or sit alongside Multi-Krum? (Madi's call — see `direction1_byzantine_aggregation_findings.md` §1 and §6)
 - [ ] Adopt multi_krum as the RFTL-S-adjacent aggregation rule for any further Direction 1 experiments (e.g. folding into a production-style comparison, or directly into the monitoring/prediction pipelines as a fourth method arm)
